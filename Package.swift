@@ -19,13 +19,18 @@ let package = Package(
         .executable(
             name: "codex-lid-keeper-self-test",
             targets: ["CodexLidKeeperSelfTests"]
+        ),
+        .executable(
+            name: "codex-lid-keeper-app",
+            targets: ["CodexLidKeeperApp"]
         )
     ],
     targets: [
         .target(
             name: "CodexLidKeeperCore",
             linkerSettings: [
-                .linkedFramework("IOKit")
+                .linkedFramework("IOKit"),
+                .linkedLibrary("sqlite3")
             ]
         ),
         .executableTarget(
@@ -35,6 +40,17 @@ let package = Package(
         .executableTarget(
             name: "CodexLidKeeperSelfTests",
             dependencies: ["CodexLidKeeperCore"]
+        ),
+        .executableTarget(
+            name: "CodexLidKeeperApp",
+            dependencies: ["CodexLidKeeperCore"],
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("IOKit"),
+                .linkedFramework("ServiceManagement"),
+                .linkedFramework("SwiftUI"),
+                .linkedFramework("UserNotifications")
+            ]
         )
     ],
     swiftLanguageModes: [.v5]

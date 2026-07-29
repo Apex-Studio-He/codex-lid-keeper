@@ -146,6 +146,7 @@ public struct KeeperState: Codable, Equatable, Sendable {
     public var schemaVersion: Int
     public var automationEnabled: Bool
     public var leases: [String: TaskLease]
+    public var runtimeLeases: [String: TaskLease]
     public var powerRequested: Bool
     public var lastDecision: KeeperDecision
     public var lastPowerSnapshot: PowerSnapshot
@@ -157,6 +158,7 @@ public struct KeeperState: Codable, Equatable, Sendable {
         schemaVersion: Int = KeeperConstants.schemaVersion,
         automationEnabled: Bool = true,
         leases: [String: TaskLease] = [:],
+        runtimeLeases: [String: TaskLease] = [:],
         powerRequested: Bool = false,
         lastDecision: KeeperDecision = .noTasks,
         lastPowerSnapshot: PowerSnapshot = .unknown,
@@ -167,6 +169,7 @@ public struct KeeperState: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.automationEnabled = automationEnabled
         self.leases = leases
+        self.runtimeLeases = runtimeLeases
         self.powerRequested = powerRequested
         self.lastDecision = lastDecision
         self.lastPowerSnapshot = lastPowerSnapshot
@@ -190,10 +193,40 @@ public struct KeeperState: Codable, Equatable, Sendable {
         }
     }
 
+    public var activeTaskLeases: [TaskLease] {
+        var selectedBySession: [String: TaskLease] = [:]
+        for lease in Array(leases.values) + Array(runtimeLeases.values) {
+            guard let current = selectedBySession[lease.sessionID] else {
+                selectedBySession[lease.sessionID] = lease
+                continue
+            }
+            let leaseIsActive = lease.releaseAfter == nil
+            let currentIsActive = current.releaseAfter == nil
+            if leaseIsActive != currentIsActive {
+                if leaseIsActive {
+                    selectedBySession[lease.sessionID] = lease
+                }
+            } else if lease.lastActivityAt > current.lastActivityAt {
+                selectedBySession[lease.sessionID] = lease
+            }
+        }
+        return selectedBySession.values.sorted {
+            if $0.startedAt == $1.startedAt {
+                return $0.id < $1.id
+            }
+            return $0.startedAt < $1.startedAt
+        }
+    }
+
+    public var hasActiveTasks: Bool {
+        !activeTaskLeases.isEmpty
+    }
+
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case automationEnabled
         case leases
+        case runtimeLeases
         case powerRequested
         case lastDecision
         case lastPowerSnapshot
@@ -215,6 +248,10 @@ public struct KeeperState: Codable, Equatable, Sendable {
         leases = try values.decodeIfPresent(
             [String: TaskLease].self,
             forKey: .leases
+        ) ?? [:]
+        runtimeLeases = try values.decodeIfPresent(
+            [String: TaskLease].self,
+            forKey: .runtimeLeases
         ) ?? [:]
         powerRequested = try values.decodeIfPresent(
             Bool.self,
@@ -264,16 +301,72 @@ public struct ReconcileResult: Equatable, Sendable {
 
 public struct PowerOwnershipRecord: Codable, Equatable, Sendable {
     public let schemaVersion: Int
-    public let previousDisableSleepEnabled: Bool
+    public let mode: GuardPowerMode
+    public let previousACDisableSleepEnabled: Bool
+    public let previousBatteryDisableSleepEnabled: Bool?
     public let createdAt: Date
 
     public init(
         schemaVersion: Int = KeeperConstants.schemaVersion,
-        previousDisableSleepEnabled: Bool,
+        mode: GuardPowerMode,
+        previousACDisableSleepEnabled: Bool,
+        previousBatteryDisableSleepEnabled: Bool?,
         createdAt: Date
     ) {
         self.schemaVersion = schemaVersion
-        self.previousDisableSleepEnabled = previousDisableSleepEnabled
+        self.mode = mode
+        self.previousACDisableSleepEnabled = previousACDisableSleepEnabled
+        self.previousBatteryDisableSleepEnabled =
+            previousBatteryDisableSleepEnabled
         self.createdAt = createdAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case mode
+        case previousACDisableSleepEnabled
+        case previousBatteryDisableSleepEnabled
+        case legacyPreviousDisableSleepEnabled =
+            "previousDisableSleepEnabled"
+        case createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decodeIfPresent(
+            Int.self,
+            forKey: .schemaVersion
+        ) ?? 1
+        mode = try values.decodeIfPresent(
+            GuardPowerMode.self,
+            forKey: .mode
+        ) ?? .acOnly
+        previousACDisableSleepEnabled = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .previousACDisableSleepEnabled
+        ) ?? values.decode(
+            Bool.self,
+            forKey: .legacyPreviousDisableSleepEnabled
+        )
+        previousBatteryDisableSleepEnabled = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .previousBatteryDisableSleepEnabled
+        )
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(schemaVersion, forKey: .schemaVersion)
+        try values.encode(mode, forKey: .mode)
+        try values.encode(
+            previousACDisableSleepEnabled,
+            forKey: .previousACDisableSleepEnabled
+        )
+        try values.encodeIfPresent(
+            previousBatteryDisableSleepEnabled,
+            forKey: .previousBatteryDisableSleepEnabled
+        )
+        try values.encode(createdAt, forKey: .createdAt)
     }
 }

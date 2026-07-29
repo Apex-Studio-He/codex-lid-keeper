@@ -2,7 +2,7 @@ import Foundation
 
 public protocol PowerControlling {
     func isOwned() -> Bool
-    func heartbeat() throws
+    func heartbeat(mode: GuardPowerMode) throws
     func restore() throws
 }
 
@@ -25,10 +25,16 @@ public final class RootHelperPowerController: PowerControlling {
         FileManager.default.fileExists(atPath: ownershipFile.path)
     }
 
-    public func heartbeat() throws {
+    public func heartbeat(mode: GuardPowerMode) throws {
+        let command = switch mode {
+        case .acOnly:
+            "enable-ac"
+        case .allowBattery:
+            "enable-battery"
+        }
         _ = try runner.run(
             executable: "/usr/bin/sudo",
-            arguments: ["-n", executablePath, "power", "enable"],
+            arguments: ["-n", executablePath, "power", command],
             timeout: 2
         )
     }
@@ -55,7 +61,7 @@ public final class DryRunPowerController: PowerControlling {
         fileManager.fileExists(atPath: marker.path)
     }
 
-    public func heartbeat() throws {
+    public func heartbeat(mode: GuardPowerMode) throws {
         try fileManager.createDirectory(
             at: marker.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -63,7 +69,10 @@ public final class DryRunPowerController: PowerControlling {
         if isOwned() {
             try fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: marker.path)
         } else {
-            try Data("dry-run\n".utf8).write(to: marker, options: .atomic)
+            try Data("\(mode.rawValue)\n".utf8).write(
+                to: marker,
+                options: .atomic
+            )
         }
     }
 

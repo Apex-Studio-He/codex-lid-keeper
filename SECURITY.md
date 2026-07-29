@@ -17,20 +17,23 @@ The installed executable lives under root-owned
 `/Library/PrivilegedHelperTools`. The sudoers entry permits only:
 
 ```text
-com.zundu.codex-lid-keeper power enable
+com.zundu.codex-lid-keeper power enable-ac
+com.zundu.codex-lid-keeper power enable-battery
 com.zundu.codex-lid-keeper power restore
 ```
 
 No command string, path, setting name, or setting value is supplied by Hook
 input.
 
-Before changing the AC-only `pmset` profile, the root process writes a root-owned
-ownership record containing the previous AC `disablesleep` state. It never
-changes the battery profile. If that record cannot be decoded, restoration
-stops with an error instead of guessing.
+Before changing a `pmset` profile, the root process writes a root-owned
+ownership record containing the selected mode and previous AC/battery
+`disablesleep` values. AC-only mode changes only the AC profile. Battery mode
+captures and changes both profiles. If that record cannot be decoded,
+restoration stops with an error instead of guessing.
 
 A root LaunchDaemon restores owned state if the user agent's heartbeat becomes
-stale. It also applies an independent AC-power and low-battery check.
+stale. It follows the recorded power mode, fails safe when live power is
+unknown, and enforces an independent 30% battery floor.
 
 ## Data handling
 
@@ -46,6 +49,19 @@ waiting for the user agent. Only these fields are decoded:
 Prompts, transcripts, model responses, tool inputs, and tool outputs are not
 decoded or stored. `cwd` is reduced to its final path component before the
 event is persisted.
+
+To recognize tasks that were already running before Hook installation, the
+user daemon also opens Codex's local SQLite databases read-only. Its queries
+select only:
+
+- turn-state metadata from rows whose target is
+  `codex_core::session::turn`; and
+- `id` and `cwd` for the matching thread.
+
+It does not select thread titles, previews, first messages, prompt text,
+responses, or tool payloads. The full `cwd` is reduced to its final component
+before it enters Keeper state. If the databases are unavailable or their
+schema changes, this detector is disabled and tracking falls back to Hooks.
 
 Each queued event is limited to 64 KiB, created with `0600` permissions, and
 validated again by the daemon. The file and event directory are synchronized
@@ -64,6 +80,7 @@ The installer changes sensitive system locations. Review:
 - `scripts/install.sh`
 - `scripts/uninstall.sh`
 - `Resources/com.zundu.codex-lid-keeper.recovery.plist`
+- `Sources/CodexLidKeeperCore/CodexRuntimeTaskDetector.swift`
 - the generated `/etc/sudoers.d/codex-lid-keeper`
 
 The installer validates the sudoers fragment with `visudo` before installing
@@ -83,5 +100,6 @@ with:
 
 ## Supported versions
 
-Until a signed release exists, only the current default branch is maintained.
-This project remains experimental and should not be deployed unattended.
+The current default branch and latest App Alpha are maintained. The app is
+ad-hoc signed rather than Developer ID signed and notarized. This project
+remains experimental and should not be deployed unattended.

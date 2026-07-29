@@ -26,6 +26,7 @@ public struct EventConsumptionReport: Equatable, Sendable {
 public enum HookEventPipelineError: Error, LocalizedError {
     case cannotCreateEventFile
     case cannotWriteEventFile
+    case cannotOpenQueueLock
     case cannotCommitEventFile
     case cannotSyncEventDirectory
     case eventFileTooLarge
@@ -38,6 +39,8 @@ public enum HookEventPipelineError: Error, LocalizedError {
             return "Could not create a private lifecycle event file."
         case .cannotWriteEventFile:
             return "Could not write the complete lifecycle event."
+        case .cannotOpenQueueLock:
+            return "Could not lock the lifecycle event queue."
         case .cannotCommitEventFile:
             return "Could not atomically commit the lifecycle event."
         case .cannotSyncEventDirectory:
@@ -90,11 +93,24 @@ public final class HookEventPipeline {
         let timestamp = Int64(occurredAt.timeIntervalSince1970 * 1_000_000)
         let filename = String(format: "%020lld-%@.json", timestamp, id.uuidString)
         let destination = directory.appendingPathComponent(filename)
-        try writeAtomically(data, to: destination, id: id)
-        if try pendingCount() > maximumPendingEventCount {
-            try? fileManager.removeItem(at: destination)
-            throw HookEventPipelineError.queueFull
+        let temporary = try writeTemporary(data, id: id)
+        var committed = false
+        defer {
+            if !committed {
+                try? fileManager.removeItem(at: temporary)
+            }
         }
+
+        try withQueueLock {
+            guard try pendingCountUnlocked() < maximumPendingEventCount else {
+                throw HookEventPipelineError.queueFull
+            }
+            guard Darwin.rename(temporary.path, destination.path) == 0 else {
+                throw HookEventPipelineError.cannotCommitEventFile
+            }
+            committed = true
+        }
+        try syncDirectory()
         return id
     }
 
@@ -179,6 +195,10 @@ public final class HookEventPipeline {
 
     public func pendingCount() throws -> Int {
         try ensureDirectory()
+        return try pendingCountUnlocked()
+    }
+
+    private func pendingCountUnlocked() throws -> Int {
         return try fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: nil,
@@ -222,7 +242,7 @@ public final class HookEventPipeline {
         )
     }
 
-    private func writeAtomically(_ data: Data, to destination: URL, id: UUID) throws {
+    private func writeTemporary(_ data: Data, id: UUID) throws -> URL {
         let temporary = directory.appendingPathComponent(".\(id.uuidString).tmp")
         let descriptor = Darwin.open(
             temporary.path,
@@ -260,10 +280,25 @@ public final class HookEventPipeline {
         guard complete, Darwin.fsync(descriptor) == 0 else {
             throw HookEventPipelineError.cannotWriteEventFile
         }
-        guard Darwin.rename(temporary.path, destination.path) == 0 else {
-            throw HookEventPipelineError.cannotCommitEventFile
-        }
         writeSucceeded = true
+        return temporary
+    }
+
+    private func withQueueLock<T>(_ body: () throws -> T) throws -> T {
+        let lockFile = directory.appendingPathComponent(".queue.lock")
+        let descriptor = Darwin.open(
+            lockFile.path,
+            O_CREAT | O_RDWR | O_EXLOCK,
+            S_IRUSR | S_IWUSR
+        )
+        guard descriptor >= 0 else {
+            throw HookEventPipelineError.cannotOpenQueueLock
+        }
+        defer { Darwin.close(descriptor) }
+        return try body()
+    }
+
+    private func syncDirectory() throws {
         let directoryDescriptor = Darwin.open(directory.path, O_RDONLY)
         guard directoryDescriptor >= 0 else {
             throw HookEventPipelineError.cannotSyncEventDirectory

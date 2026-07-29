@@ -4,6 +4,72 @@ All notable project changes are recorded here.
 
 本文件记录项目的重要变化。
 
+## [0.2.0-app-alpha] - 2026-07-30
+
+### English
+
+#### Added
+
+- Native SwiftUI macOS app with a main dashboard, menu-bar panel, and Settings.
+- Four-stage closed-lid readiness rail for Codex activity, power policy,
+  charge safety, and recovery health.
+- Explicit AC-only or AC-and-battery guard policies.
+- Configurable 30–100% charge floor with an independent 30% root-watchdog
+  minimum.
+- Reversible built-in display dimming, including Apple Silicon support.
+- Live task, AC, and battery reporting with no fabricated placeholder values.
+- Read-only runtime detection for tasks already running before Hook
+  installation, with session-level deduplication across both sources.
+- Source-built `.app` packaging, `/Applications` installation, launch-at-login,
+  notifications, and integration diagnostics.
+- Strict concurrent event-spool capacity and new mode/restoration regressions.
+
+#### Changed
+
+- Root ownership now records mode plus prior AC and battery profiles
+  independently.
+- The sudo boundary now exposes three exact commands: AC enable, battery
+  enable, and restore.
+- The installer builds, installs, and launches the graphical app.
+- Native regression coverage increased to 44 self-tests.
+
+#### Still experimental
+
+- The app is ad-hoc signed, not Developer ID signed or notarized.
+- Closed-lid networking and thermal behavior still require per-model testing.
+- `pmset disablesleep` and the Apple Silicon brightness fallback rely on
+  undocumented macOS behavior.
+
+### 中文
+
+这一版把原来的命令行守护做成了能日常使用的 macOS 图形 App，同时补齐了用户
+提出的接电 / 电池模式选择。
+
+#### 新增
+
+- 原生 SwiftUI 主窗口、菜单栏面板和设置页；
+- Codex、电源策略、电量、恢复守护四项合盖检查；
+- “仅接电”和“接电或电池”两种守护模式；
+- 30%—100% 可调安全线，以及 root watchdog 不可降低的 30% 底线；
+- 保存、调暗和恢复内置屏幕亮度，支持当前 Apple Silicon Mac；
+- 只读补记安装前已经在跑的任务，并与 Hook 按 session 去重；
+- 实时任务数、供电状态和系统电量，两条任务信号都不可用时显示 `—`；
+- App 打包、安装到 `/Applications`、登录启动、通知与权限诊断；
+- 并发事件队列上限修复，以及供电模式和原配置恢复回归测试。
+
+#### 调整
+
+- root 所有权记录现在分别保存 AC、电池原值和当前模式；
+- sudoers 改为只放行“接电开启”“电池开启”“恢复”三条固定命令；
+- 安装脚本会构建、安装并启动图形 App；
+- Swift 自测增加到 44 项。
+
+#### 仍需注意
+
+- 当前只有 ad-hoc 签名，还没有 Developer ID 签名和 notarization；
+- 合盖后的网络和散热仍需按机型实测；
+- `pmset disablesleep` 与 Apple Silicon 亮度兼容层都依赖未公开的 macOS 行为。
+
 ## [0.1.0-alpha] - 2026-07-29
 
 ### English
@@ -76,3 +142,4 @@ All notable project changes are recorded here.
 - 还没有菜单栏界面、自动更新和兼容机型列表。
 
 [0.1.0-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.1.0-alpha
+[0.2.0-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.0-app-alpha

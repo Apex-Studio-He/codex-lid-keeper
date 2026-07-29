@@ -84,7 +84,22 @@ public enum LeaseReducer {
         from state: inout KeeperState,
         now: Date
     ) -> Int {
-        let expiredIDs = state.leases.values.compactMap { lease -> String? in
+        let removedHookLeases = pruneExpired(
+            from: &state.leases,
+            now: now
+        )
+        let removedRuntimeLeases = pruneExpired(
+            from: &state.runtimeLeases,
+            now: now
+        )
+        return removedHookLeases + removedRuntimeLeases
+    }
+
+    private static func pruneExpired(
+        from leases: inout [String: TaskLease],
+        now: Date
+    ) -> Int {
+        let expiredIDs = leases.values.compactMap { lease -> String? in
             if lease.expiresAt <= now {
                 return lease.id
             }
@@ -95,7 +110,7 @@ public enum LeaseReducer {
         }
 
         for id in expiredIDs {
-            state.leases.removeValue(forKey: id)
+            leases.removeValue(forKey: id)
         }
         return expiredIDs.count
     }
