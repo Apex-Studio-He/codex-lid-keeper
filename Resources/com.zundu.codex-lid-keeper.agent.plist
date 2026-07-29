@@ -6,7 +6,7 @@
     <string>com.zundu.codex-lid-keeper.agent</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper</string>
+        <string>/Applications/Codex Lid Keeper.app/Contents/Resources/codex-lid-keeper</string>
         <string>daemon</string>
     </array>
     <key>RunAtLoad</key>

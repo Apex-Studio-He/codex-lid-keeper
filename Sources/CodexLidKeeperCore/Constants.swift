@@ -1,7 +1,8 @@
 import Foundation
 
 public enum KeeperConstants {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
+    public static let maximumReadableSchemaVersion = 4
     public static let eventSchemaVersion = 1
     public static let hookInputLimit = 1_048_576
     public static let eventFileLimit = 65_536
@@ -15,6 +16,12 @@ public enum KeeperConstants {
         "/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper"
     public static let rootOwnershipFile = "/var/db/com.zundu.codex-lid-keeper.power.json"
     public static let rootWatchdogMaximumAge: TimeInterval = 120
+    public static let runtimeLogRowLimit = 50_000
+}
+
+public enum GuardPowerMode: String, Codable, CaseIterable, Equatable, Sendable {
+    case acOnly
+    case allowBattery
 }
 
 public struct RuntimeConfiguration: Codable, Equatable, Sendable {
@@ -23,19 +30,22 @@ public struct RuntimeConfiguration: Codable, Equatable, Sendable {
     public var releaseDelay: TimeInterval
     public var eventPollInterval: TimeInterval
     public var powerHeartbeatInterval: TimeInterval
+    public var powerMode: GuardPowerMode
 
     public init(
         minimumBatteryPercent: Int = 30,
         leaseDuration: TimeInterval = 8 * 60 * 60,
         releaseDelay: TimeInterval = 20,
         eventPollInterval: TimeInterval = 1,
-        powerHeartbeatInterval: TimeInterval = 10
+        powerHeartbeatInterval: TimeInterval = 10,
+        powerMode: GuardPowerMode = .acOnly
     ) {
         self.minimumBatteryPercent = minimumBatteryPercent
         self.leaseDuration = leaseDuration
         self.releaseDelay = releaseDelay
         self.eventPollInterval = eventPollInterval
         self.powerHeartbeatInterval = powerHeartbeatInterval
+        self.powerMode = powerMode
     }
 
     public static let `default` = RuntimeConfiguration()
@@ -65,6 +75,7 @@ public struct RuntimeConfiguration: Codable, Equatable, Sendable {
         case releaseDelay
         case eventPollInterval
         case powerHeartbeatInterval
+        case powerMode
         case legacyPollInterval = "pollInterval"
     }
 
@@ -93,6 +104,10 @@ public struct RuntimeConfiguration: Codable, Equatable, Sendable {
             TimeInterval.self,
             forKey: .legacyPollInterval
         ) ?? 10
+        powerMode = try values.decodeIfPresent(
+            GuardPowerMode.self,
+            forKey: .powerMode
+        ) ?? .acOnly
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -102,6 +117,7 @@ public struct RuntimeConfiguration: Codable, Equatable, Sendable {
         try values.encode(releaseDelay, forKey: .releaseDelay)
         try values.encode(eventPollInterval, forKey: .eventPollInterval)
         try values.encode(powerHeartbeatInterval, forKey: .powerHeartbeatInterval)
+        try values.encode(powerMode, forKey: .powerMode)
     }
 }
 

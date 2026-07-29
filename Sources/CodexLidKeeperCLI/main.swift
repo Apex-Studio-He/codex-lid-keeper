@@ -115,7 +115,8 @@ struct CodexLidKeeperMain {
             eventDirectory: context.paths.eventSpoolDirectory,
             stateStore: context.stateStore,
             powerSourceProvider: context.powerSourceProvider,
-            powerController: context.powerController
+            powerController: context.powerController,
+            runtimeTaskDetector: context.runtimeTaskDetector
         )
         repeat {
             let configuration = try context.configurationStore.load()
@@ -157,6 +158,7 @@ struct CodexLidKeeperMain {
             state.automationEnabled = enabled
             if clearLeases {
                 state.leases.removeAll()
+                state.runtimeLeases.removeAll()
             }
             _ = KeeperReconciler.reconcile(
                 state: &state,
@@ -176,6 +178,7 @@ struct CodexLidKeeperMain {
                 state.automationEnabled = false
             }
             state.leases.removeAll()
+            state.runtimeLeases.removeAll()
             _ = KeeperReconciler.reconcile(
                 state: &state,
                 configuration: configuration,
@@ -190,6 +193,7 @@ struct CodexLidKeeperMain {
         try context.stateStore.update { state in
             state.automationEnabled = false
             state.leases.removeAll()
+            state.runtimeLeases.removeAll()
             state.powerRequested = false
             state.lastDecision = .paused
             state.lastReconciledAt = Date()
@@ -204,13 +208,26 @@ struct CodexLidKeeperMain {
         let state = try context.stateStore.read()
         let livePower = context.powerSourceProvider.currentSnapshot()
         let pendingEventCount = try context.eventPipeline.pendingCount()
+        let detection = context.runtimeTaskDetector.detectActiveTasks(
+            now: Date(),
+            maximumAge: configuration.leaseDuration
+        )
+        var statusState = state
+        if detection.sourceAvailable {
+            statusState.runtimeLeases = Dictionary(
+                uniqueKeysWithValues: detection.activeTasks.map {
+                    ($0.id, $0)
+                }
+            )
+        }
         let status = StatusReport(
             automationEnabled: state.automationEnabled,
-            activeLeases: state.leases.values.sorted { $0.startedAt < $1.startedAt },
+            activeLeases: statusState.activeTaskLeases,
             decision: state.lastDecision,
             powerOwned: context.powerController.isOwned(),
             livePower: livePower,
             pendingEventCount: pendingEventCount,
+            runtimeDetectionAvailable: detection.sourceAvailable,
             configuration: configuration,
             lastError: state.lastError,
             lastReconciledAt: state.lastReconciledAt
@@ -226,6 +243,10 @@ struct CodexLidKeeperMain {
         print("  Automation: \(status.automationEnabled ? "enabled" : "paused")")
         print("  Active tasks: \(status.activeLeases.count)")
         print("  Pending events: \(status.pendingEventCount)")
+        print(
+            "  Runtime detection: "
+                + (status.runtimeDetectionAvailable ? "available" : "unavailable")
+        )
         print("  Decision: \(status.decision.rawValue)")
         print("  Sleep override owned: \(status.powerOwned ? "yes" : "no")")
         print("  AC power: \(display(status.livePower.isOnACPower))")
@@ -251,7 +272,10 @@ struct CodexLidKeeperMain {
 
     private static func runPower(arguments: [String]) -> Int32 {
         guard let command = arguments.first else {
-            fputs("Usage: codex-lid-keeper power {enable|restore|watchdog|status}\n", stderr)
+            fputs(
+                "Usage: codex-lid-keeper power {enable-ac|enable-battery|restore|watchdog|status}\n",
+                stderr
+            )
             return 2
         }
 
@@ -275,8 +299,10 @@ struct CodexLidKeeperMain {
 
         do {
             switch command {
-            case "enable":
-                try manager.enable()
+            case "enable", "enable-ac":
+                try manager.enable(mode: .acOnly)
+            case "enable-battery":
+                try manager.enable(mode: .allowBattery)
             case "restore":
                 try manager.restore()
             case "watchdog":
@@ -284,13 +310,10 @@ struct CodexLidKeeperMain {
                     return 0
                 }
                 let snapshot = SystemPowerSourceProvider().currentSnapshot()
-                let unsafePower = snapshot.isOnACPower != true
-                    || snapshot.batteryPercent.map {
-                        $0 < RuntimeConfiguration.default.minimumBatteryPercent
-                    } == true
-                if unsafePower {
-                    try manager.restore()
-                } else {
+                let restored = try manager.restoreIfPowerUnsafe(
+                    snapshot: snapshot
+                )
+                if !restored {
                     _ = try manager.restoreIfHeartbeatExpired()
                 }
             default:
@@ -331,6 +354,7 @@ private final class RuntimeContext {
     let eventPipeline: HookEventPipeline
     let powerSourceProvider: PowerSourceProviding
     let powerController: PowerControlling
+    let runtimeTaskDetector: RuntimeTaskDetecting
 
     init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let home = environment["CODEX_LID_KEEPER_HOME"]
@@ -346,6 +370,9 @@ private final class RuntimeContext {
         eventPipeline = HookEventPipeline(
             directory: paths.eventSpoolDirectory,
             stateStore: stateStore
+        )
+        runtimeTaskDetector = CodexRuntimeTaskDetector(
+            homeDirectory: home
         )
         let dryRun = environment["CODEX_LID_KEEPER_DRY_RUN"] == "1"
         if dryRun, environment["CODEX_LID_KEEPER_TEST_POWER"] == "ac" {
@@ -382,6 +409,7 @@ private struct StatusReport: Codable {
     let powerOwned: Bool
     let livePower: PowerSnapshot
     let pendingEventCount: Int
+    let runtimeDetectionAvailable: Bool
     let configuration: RuntimeConfiguration
     let lastError: String?
     let lastReconciledAt: Date?

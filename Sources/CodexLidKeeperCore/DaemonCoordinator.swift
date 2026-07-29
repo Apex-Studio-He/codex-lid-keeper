@@ -18,6 +18,7 @@ public final class DaemonCoordinator {
     private let stateStore: LockedStateStore
     private let powerSourceProvider: PowerSourceProviding
     private let powerController: PowerControlling
+    private let runtimeTaskDetector: RuntimeTaskDetecting?
 
     private var lastReconciledAt: Date?
     private var lastHeartbeatAt: Date?
@@ -28,6 +29,7 @@ public final class DaemonCoordinator {
         stateStore: LockedStateStore,
         powerSourceProvider: PowerSourceProviding,
         powerController: PowerControlling,
+        runtimeTaskDetector: RuntimeTaskDetecting? = nil,
         fileManager: FileManager = .default
     ) {
         eventPipeline = HookEventPipeline(
@@ -38,6 +40,7 @@ public final class DaemonCoordinator {
         self.stateStore = stateStore
         self.powerSourceProvider = powerSourceProvider
         self.powerController = powerController
+        self.runtimeTaskDetector = runtimeTaskDetector
     }
 
     public func runCycle(
@@ -46,6 +49,10 @@ public final class DaemonCoordinator {
     ) throws -> DaemonCycleReport {
         let configuration = try configuration.validated()
         let consumption = try eventPipeline.consume(
+            configuration: configuration,
+            now: now
+        )
+        let runtimeChanged = try synchronizeRuntimeTasks(
             configuration: configuration,
             now: now
         )
@@ -59,6 +66,7 @@ public final class DaemonCoordinator {
             now: now
         )
         guard consumption.appliedCount > 0
+            || runtimeChanged
             || (needsMaintenance && maintenanceDue) else {
             return DaemonCycleReport(
                 eventConsumption: consumption,
@@ -97,6 +105,30 @@ public final class DaemonCoordinator {
             eventConsumption: consumption,
             reconciliation: result
         )
+    }
+
+    private func synchronizeRuntimeTasks(
+        configuration: RuntimeConfiguration,
+        now: Date
+    ) throws -> Bool {
+        guard let runtimeTaskDetector else { return false }
+        let detection = runtimeTaskDetector.detectActiveTasks(
+            now: now,
+            maximumAge: configuration.leaseDuration
+        )
+        guard detection.sourceAvailable else { return false }
+        let detected = Dictionary(
+            uniqueKeysWithValues: detection.activeTasks.map {
+                ($0.id, $0)
+            }
+        )
+        let existing = try stateStore.read().runtimeLeases
+        guard existing != detected else { return false }
+        return try stateStore.update { state in
+            guard state.runtimeLeases != detected else { return false }
+            state.runtimeLeases = detected
+            return true
+        }
     }
 
     private func isDue(

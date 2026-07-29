@@ -24,10 +24,11 @@ Codex Lid Keeper 会以 root 权限修改 macOS 的电源设置，而且用到�
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper
 ```
 
-sudoers 只放行下面两种调用：
+sudoers 只放行下面三种调用：
 
 ```text
-com.zundu.codex-lid-keeper power enable
+com.zundu.codex-lid-keeper power enable-ac
+com.zundu.codex-lid-keeper power enable-battery
 com.zundu.codex-lid-keeper power restore
 ```
 
@@ -36,17 +37,16 @@ Hook 传进来的内容不能决定命令、参数、设置名称或设置值。
 
 ## 为什么不会直接写死为 0
 
-第一次修改前，root Helper 会读取 `pmset -g custom` 里的 AC 配置，并记下
-`disablesleep` 原本是否开启。这个记录保存在：
+第一次修改前，root Helper 会读取 `pmset -g custom`，记下当前模式和将要修改的
+AC / 电池配置。这个记录保存在：
 
 ```text
 /var/db/com.zundu.codex-lid-keeper.power.json
 ```
 
-恢复时写回记录中的原值，而不是一律执行 `disablesleep 0`。如果记录损坏，程序
-会停止并报错，不会靠猜。
-
-本项目只修改 AC 配置，不动电池配置。
+“仅接电”模式只修改 AC 配置；“接电或电池”模式会分别记录并修改 AC 与电池
+配置。恢复时逐项写回原值，而不是一律执行 `disablesleep 0`。如果记录损坏，
+程序会停止并报错，不会靠猜。
 
 ## 后台进程挂了怎么办
 
@@ -54,9 +54,9 @@ Hook 传进来的内容不能决定命令、参数、设置名称或设置值。
 出现以下情况时，watchdog 会恢复由本项目接管的设置：
 
 - 心跳超过两分钟没有更新；
-- MacBook 已经拔掉外接电源；
+- 当前供电不符合所有权记录里的模式；
 - 系统无法确认当前电源状态；
-- 电量低于安全线。
+- 电量低于不可降低的 30% 硬底线。
 
 任务本身也有最长八小时的硬过期时间，避免某个结束事件丢失后一直保持唤醒。
 
@@ -74,6 +74,16 @@ Hook 从标准输入读取 JSON，大小上限是 1 MiB。它只读取：
 
 Hook 不会调用 `sudo`，也不会查询电源。它只把一条小事件原子写入本地队列，然后
 返回，让 Codex 继续工作。
+
+为了补上 Hook 安装前就已经开始的任务，用户后台进程还会用只读方式打开 Codex
+本地 SQLite 数据库。查询范围严格限制为：
+
+- `codex_core::session::turn` 对应的 turn 状态元数据；
+- 活跃线程的 `id` 和 `cwd`。
+
+它不会查询任务标题、预览、首条消息、提示词、回复或工具内容。完整 `cwd` 在进入
+Keeper 状态前只保留最后一级目录名。如果数据库不存在或以后改了格式，这条检测
+会自动停用，任务跟踪回退到 Hook。
 
 ## 本地文件怎么保护
 
@@ -98,6 +108,7 @@ root watchdog 保护。
 - `scripts/hooks_config.py`
 - `Resources/com.zundu.codex-lid-keeper.agent.plist`
 - `Resources/com.zundu.codex-lid-keeper.recovery.plist`
+- `Sources/CodexLidKeeperCore/CodexRuntimeTaskDetector.swift`
 - `Sources/CodexLidKeeperCore/PrivilegedPowerManager.swift`
 
 安装脚本会先用 `visudo` 检查 sudoers 文件，验证通过才会放进系统目录。安装后，
@@ -118,5 +129,5 @@ Codex 还会要求你手动检查并信任新增 Hook。
 
 ## 当前支持范围
 
-这是公开 Alpha。没有签名 App 和正式安装包之前，只维护默认分支，不建议拿它做
-无人值守部署。
+这是公开 Alpha。当前维护默认分支和最新 App Alpha；App 只有 ad-hoc 签名，
+还没有 Developer ID 签名与 notarization，不建议拿它做无人值守部署。

@@ -26,7 +26,14 @@ jobs:
       - name: Dry-run lifecycle test
         run: /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
 
+      - name: Build and verify macOS app
+        run: |
+          ./scripts/build_app.sh
+          /usr/bin/codesign --verify --deep --strict "dist/Codex Lid Keeper.app"
+          /usr/bin/plutil -lint "dist/Codex Lid Keeper.app/Contents/Info.plist"
+
       - name: Validate scripts and launchd files
         run: |
           for script in scripts/*.sh; do /bin/bash -n "$script"; done
           for plist in Resources/*.plist; do /usr/bin/plutil -lint "$plist"; done
+          git diff --check

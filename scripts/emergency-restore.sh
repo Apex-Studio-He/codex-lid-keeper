@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-binary_target="/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper"
+controller_binary="/Applications/Codex Lid Keeper.app/Contents/Resources/codex-lid-keeper"
+root_helper="/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper"
 ownership_file="/var/db/com.zundu.codex-lid-keeper.power.json"
 
-if [[ -x "$binary_target" ]]; then
-  "$binary_target" emergency-restore || true
-  sudo "$binary_target" power restore
+if [[ -x "$root_helper" ]]; then
+  if [[ -x "$controller_binary" ]]; then
+    "$controller_binary" emergency-restore || true
+  else
+    "$root_helper" emergency-restore || true
+  fi
+  sudo "$root_helper" power restore
   printf 'Codex Lid Keeper ownership was restored and automation was paused.\n'
   exit 0
 fi

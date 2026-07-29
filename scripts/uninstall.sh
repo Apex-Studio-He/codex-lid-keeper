@@ -3,12 +3,15 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 binary_target="/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper"
+app_target="/Applications/Codex Lid Keeper.app"
 sudoers_target="/etc/sudoers.d/codex-lid-keeper"
 daemon_target="/Library/LaunchDaemons/com.zundu.codex-lid-keeper.recovery.plist"
 agent_target="${HOME:?}/Library/LaunchAgents/com.zundu.codex-lid-keeper.agent.plist"
 hooks_file="${HOME:?}/.codex/hooks.json"
 hook_command="$binary_target hook"
 console_uid="$(id -u)"
+
+/usr/bin/pkill -x "Codex Lid Keeper" >/dev/null 2>&1 || true
 
 if [[ -x "$binary_target" ]]; then
   "$binary_target" emergency-restore || true
@@ -28,6 +31,7 @@ sudo /bin/launchctl bootout \
 sudo rm -f "$daemon_target"
 sudo rm -f "$sudoers_target"
 sudo rm -f "$binary_target"
+sudo /bin/rm -rf "$app_target"
 
 printf 'Codex Lid Keeper was uninstalled and its owned power state was restored.\n'
 printf 'User logs/config were preserved at: %s\n' \

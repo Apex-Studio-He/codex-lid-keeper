@@ -21,7 +21,9 @@ public enum KeeperReconciler {
         do {
             if shouldOwnPower {
                 if refreshHeartbeat || !powerController.isOwned() {
-                    try powerController.heartbeat()
+                    try powerController.heartbeat(
+                        mode: configuration.powerMode
+                    )
                 }
             } else if powerController.isOwned() {
                 try powerController.restore()
@@ -37,7 +39,7 @@ public enum KeeperReconciler {
         state.lastReconciledAt = now
 
         return ReconcileResult(
-            activeLeaseCount: state.leases.count,
+            activeLeaseCount: state.activeTaskLeases.count,
             removedLeaseCount: removed,
             decision: decision,
             powerOwned: powerController.isOwned()
@@ -52,14 +54,17 @@ public enum KeeperReconciler {
         guard state.automationEnabled else {
             return .paused
         }
-        guard !state.leases.isEmpty else {
+        guard state.hasActiveTasks else {
             return .noTasks
         }
         guard let isOnACPower = powerSnapshot.isOnACPower else {
             return .powerUnknown
         }
-        guard isOnACPower else {
+        if !isOnACPower, configuration.powerMode == .acOnly {
             return .onBattery
+        }
+        if !isOnACPower, powerSnapshot.batteryPercent == nil {
+            return .powerUnknown
         }
         if let batteryPercent = powerSnapshot.batteryPercent,
            batteryPercent < configuration.minimumBatteryPercent {

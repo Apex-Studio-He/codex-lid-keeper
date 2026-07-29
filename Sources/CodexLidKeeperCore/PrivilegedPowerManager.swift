@@ -3,6 +3,7 @@ import Foundation
 public enum PrivilegedPowerError: Error, LocalizedError, Equatable {
     case malformedOwnershipRecord
     case missingACPowerProfile
+    case missingBatteryPowerProfile
 
     public var errorDescription: String? {
         switch self {
@@ -10,6 +11,8 @@ public enum PrivilegedPowerError: Error, LocalizedError, Equatable {
             return "The root power ownership record is malformed; refusing to guess the prior setting."
         case .missingACPowerProfile:
             return "Could not find the AC Power profile in pmset output; refusing to change it."
+        case .missingBatteryPowerProfile:
+            return "Could not find the Battery Power profile in pmset output; refusing to change it."
         }
     }
 }
@@ -29,29 +32,43 @@ public final class PrivilegedPowerManager {
         self.fileManager = fileManager
     }
 
-    public func enable(now: Date = Date()) throws {
+    public func enable(
+        mode: GuardPowerMode = .acOnly,
+        now: Date = Date()
+    ) throws {
         if fileManager.fileExists(atPath: ownershipFile.path) {
-            _ = try readOwnershipRecord()
-            try touchOwnershipFile(now: now)
-            return
+            let existing = try readOwnershipRecord()
+            if existing.mode == mode {
+                try touchOwnershipFile(now: now)
+                return
+            }
+            try restore()
         }
 
-        let previousEnabled = try queryDisableSleepEnabled()
+        let previous = try queryDisableSleepProfiles()
+        guard let previousAC = previous.ac else {
+            throw PrivilegedPowerError.missingACPowerProfile
+        }
+        if mode == .allowBattery, previous.battery == nil {
+            throw PrivilegedPowerError.missingBatteryPowerProfile
+        }
         let record = PowerOwnershipRecord(
-            previousDisableSleepEnabled: previousEnabled,
+            mode: mode,
+            previousACDisableSleepEnabled: previousAC,
+            previousBatteryDisableSleepEnabled:
+                mode == .allowBattery ? previous.battery : nil,
             createdAt: now
         )
         try writeOwnershipRecord(record)
 
         do {
-            _ = try runner.run(
-                executable: "/usr/bin/pmset",
-                arguments: ["-c", "disablesleep", "1"],
-                timeout: 3
-            )
+            try setDisableSleep(profile: "-c", enabled: true)
+            if mode == .allowBattery {
+                try setDisableSleep(profile: "-b", enabled: true)
+            }
             try touchOwnershipFile(now: now)
         } catch {
-            try? fileManager.removeItem(at: ownershipFile)
+            try? restore()
             throw error
         }
     }
@@ -63,12 +80,17 @@ public final class PrivilegedPowerManager {
 
         let record = try readOwnershipRecord()
 
-        if !record.previousDisableSleepEnabled {
-            _ = try runner.run(
-                executable: "/usr/bin/pmset",
-                arguments: ["-c", "disablesleep", "0"],
-                timeout: 3
-            )
+        if !record.previousACDisableSleepEnabled {
+            try setDisableSleep(profile: "-c", enabled: false)
+        }
+        if record.mode == .allowBattery {
+            guard let previousBattery =
+                record.previousBatteryDisableSleepEnabled else {
+                throw PrivilegedPowerError.malformedOwnershipRecord
+            }
+            if !previousBattery {
+                try setDisableSleep(profile: "-b", enabled: false)
+            }
         }
         try fileManager.removeItem(at: ownershipFile)
     }
@@ -93,14 +115,53 @@ public final class PrivilegedPowerManager {
         return true
     }
 
+    @discardableResult
+    public func restoreIfPowerUnsafe(
+        snapshot: PowerSnapshot,
+        minimumBatteryPercent: Int =
+            RuntimeConfiguration.default.minimumBatteryPercent
+    ) throws -> Bool {
+        guard fileManager.fileExists(atPath: ownershipFile.path) else {
+            return false
+        }
+        let record = try readOwnershipRecord()
+        guard let isOnACPower = snapshot.isOnACPower else {
+            try restore()
+            return true
+        }
+        if !isOnACPower, record.mode == .acOnly {
+            try restore()
+            return true
+        }
+        if !isOnACPower, snapshot.batteryPercent == nil {
+            try restore()
+            return true
+        }
+        if let batteryPercent = snapshot.batteryPercent,
+           batteryPercent < minimumBatteryPercent {
+            try restore()
+            return true
+        }
+        return false
+    }
+
     public func queryDisableSleepEnabled() throws -> Bool {
+        let profiles = try queryDisableSleepProfiles()
+        guard let ac = profiles.ac else {
+            throw PrivilegedPowerError.missingACPowerProfile
+        }
+        return ac
+    }
+
+    private func queryDisableSleepProfiles() throws -> PowerProfileSnapshot {
         let result = try runner.run(
             executable: "/usr/bin/pmset",
             arguments: ["-g", "custom"],
             timeout: 3
         )
-        var foundACProfile = false
-        var inACProfile = false
+        var currentProfile: PowerProfile?
+        var ac: Bool?
+        var battery: Bool?
 
         for rawLine in result.outputString.split(
             omittingEmptySubsequences: false,
@@ -111,21 +172,31 @@ public final class PrivilegedPowerManager {
             let isProfileHeader = line.first.map { !$0.isWhitespace } == true
                 && trimmed.hasSuffix(":")
             if isProfileHeader {
-                inACProfile = trimmed.caseInsensitiveCompare("AC Power:") == .orderedSame
-                foundACProfile = foundACProfile || inACProfile
+                if trimmed.caseInsensitiveCompare("AC Power:")
+                    == .orderedSame {
+                    currentProfile = .ac
+                    ac = false
+                } else if trimmed.caseInsensitiveCompare("Battery Power:")
+                    == .orderedSame {
+                    currentProfile = .battery
+                    battery = false
+                } else {
+                    currentProfile = nil
+                }
                 continue
             }
-            guard inACProfile else { continue }
+            guard let currentProfile else { continue }
             let fields = trimmed.split(whereSeparator: \.isWhitespace)
             if fields.count >= 2, fields[0].lowercased() == "disablesleep" {
-                return fields[1] == "1"
+                switch currentProfile {
+                case .ac:
+                    ac = fields[1] == "1"
+                case .battery:
+                    battery = fields[1] == "1"
+                }
             }
         }
-
-        guard foundACProfile else {
-            throw PrivilegedPowerError.missingACPowerProfile
-        }
-        return false
+        return PowerProfileSnapshot(ac: ac, battery: battery)
     }
 
     private func writeOwnershipRecord(_ record: PowerOwnershipRecord) throws {
@@ -137,7 +208,7 @@ public final class PrivilegedPowerManager {
         let data = try LockedStateStore.encoder.encode(record)
         try data.write(to: ownershipFile, options: .atomic)
         try fileManager.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o644))],
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
             ofItemAtPath: ownershipFile.path
         )
     }
@@ -152,12 +223,44 @@ public final class PrivilegedPowerManager {
     private func readOwnershipRecord() throws -> PowerOwnershipRecord {
         do {
             let data = try Data(contentsOf: ownershipFile)
-            return try LockedStateStore.decoder.decode(
+            let record = try LockedStateStore.decoder.decode(
                 PowerOwnershipRecord.self,
                 from: data
             )
+            guard record.schemaVersion > 0,
+                  record.schemaVersion <= KeeperConstants.schemaVersion,
+                  record.mode == .acOnly
+                    || record.previousBatteryDisableSleepEnabled != nil else {
+                throw PrivilegedPowerError.malformedOwnershipRecord
+            }
+            return record
         } catch {
             throw PrivilegedPowerError.malformedOwnershipRecord
         }
     }
+
+    private func setDisableSleep(
+        profile: String,
+        enabled: Bool
+    ) throws {
+        _ = try runner.run(
+            executable: "/usr/bin/pmset",
+            arguments: [
+                profile,
+                "disablesleep",
+                enabled ? "1" : "0"
+            ],
+            timeout: 3
+        )
+    }
+}
+
+private enum PowerProfile {
+    case ac
+    case battery
+}
+
+private struct PowerProfileSnapshot {
+    let ac: Bool?
+    let battery: Bool?
 }

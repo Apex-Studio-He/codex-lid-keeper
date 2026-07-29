@@ -72,7 +72,8 @@ public final class LockedStateStore {
         let data = try Data(contentsOf: stateFile)
         var state = try Self.decoder.decode(KeeperState.self, from: data)
         guard state.schemaVersion > 0,
-              state.schemaVersion <= KeeperConstants.schemaVersion else {
+              state.schemaVersion
+                <= KeeperConstants.maximumReadableSchemaVersion else {
             throw StateStoreError.unsupportedSchema(state.schemaVersion)
         }
         state.schemaVersion = KeeperConstants.schemaVersion

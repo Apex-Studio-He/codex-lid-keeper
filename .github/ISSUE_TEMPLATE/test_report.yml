@@ -1,0 +1,111 @@
+name: "Hardware test report / 实机测试反馈"
+description: "Share a pass or failure from a controlled MacBook test / 反馈受控 MacBook 测试结果"
+title: "[Test] "
+labels:
+  - testing
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing Codex Lid Keeper.
+
+        感谢你帮忙测试。请先删除提示词、对话、密钥、session ID 和个人路径；不要上传完整 Hook 文件。
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: "Safety confirmation / 安全确认"
+      options:
+        - label: "I tested on a hard, open, well-ventilated desk / 我是在坚硬、开放、通风的桌面上测试的"
+          required: true
+        - label: "The MacBook was never placed in a bag or enclosed space / 测试期间没有把 MacBook 放进包或封闭空间"
+          required: true
+
+  - type: input
+    id: mac_model
+    attributes:
+      label: "Mac model / Mac 型号"
+      description: "For example: MacBook Air M2, 2022"
+      placeholder: "MacBook Air M2, 2022"
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: "macOS version / macOS 版本"
+      placeholder: "15.6.1 (24G90)"
+    validations:
+      required: true
+
+  - type: input
+    id: codex
+    attributes:
+      label: "Codex version / Codex 版本"
+      placeholder: "Codex app or CLI version"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: power_mode
+    attributes:
+      label: "Guard policy / 守护策略"
+      options:
+        - "AC only / 仅接电"
+        - "AC or battery / 接电或电池"
+        - "Both / 两种都测了"
+    validations:
+      required: true
+
+  - type: input
+    id: battery
+    attributes:
+      label: "Power and battery / 供电与电量"
+      placeholder: "AC connected, 82%, floor 30% / 已接电，82%，安全线 30%"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: coverage
+    attributes:
+      label: "What did you test? / 测了哪些项目？"
+      options:
+        - label: "Single task lifecycle / 单任务生命周期"
+        - label: "Multiple concurrent tasks / 多任务并发"
+        - label: "Power-policy switching / 供电策略切换"
+        - label: "Brightness dim and restore / 亮度调暗与恢复"
+        - label: "Controlled closed-lid run / 受控合盖运行"
+        - label: "Emergency restore / 紧急恢复"
+
+  - type: textarea
+    id: result
+    attributes:
+      label: "Result / 测试结果"
+      description: "Include task progress, networking, restoration, and anything unexpected."
+      placeholder: "What passed or failed? / 哪些通过了，哪些没有？"
+    validations:
+      required: true
+
+  - type: textarea
+    id: thermal
+    attributes:
+      label: "Temperature observation / 温度观察"
+      placeholder: "Cool, warm, unusually hot, or measured values / 正常、温热、异常发热或实测温度"
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: "Sanitized diagnostics / 打码后的诊断信息"
+      description: "Optional: status --json, relevant launchctl state, or pmset comparison."
+      render: shell
+
+  - type: dropdown
+    id: emergency
+    attributes:
+      label: "Did emergency restore work? / 紧急恢复是否正常？"
+      options:
+        - "Yes / 正常"
+        - "No / 不正常"
+        - "Not tested / 没测试"
+    validations:
+      required: true

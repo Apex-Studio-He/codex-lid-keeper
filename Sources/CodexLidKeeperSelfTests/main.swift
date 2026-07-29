@@ -21,17 +21,26 @@ struct CodexLidKeeperSelfTests {
             ("far-future event is rejected", testFutureEvent),
             ("concurrent Hook events do not collide", testConcurrentEvents),
             ("event spool enforces capacity", testEventCapacity),
+            ("event spool capacity is strict under concurrency", testConcurrentEventCapacity),
             ("daemon coordinator becomes idle after startup", testDaemonIdle),
             ("daemon coordinator maintains active power", testDaemonMaintenance),
+            ("runtime metadata detects concurrent tasks", testRuntimeTaskDetection),
+            ("runtime tasks drive daemon power and release", testRuntimeDaemonLifecycle),
+            ("hook and runtime observations are deduplicated", testTaskDeduplication),
             ("active AC task heartbeats", testActiveAC),
             ("active owned state skips early heartbeat", testHeartbeatCadence),
             ("battery power restores", testBatteryRestore),
+            ("battery mode keeps eligible work active", testBatteryAllowed),
+            ("battery mode rejects unknown charge", testBatteryChargeUnknown),
             ("low battery restores on AC", testLowBatteryRestore),
             ("unknown power fails safe", testUnknownPower),
             ("power error retains lease", testPowerFailure),
             ("prior disabled state restores to zero", testRestorePriorDisabled),
             ("prior enabled state is preserved", testPreservePriorEnabled),
             ("battery profile does not mask AC prior state", testBatteryProfileIgnored),
+            ("battery mode restores both prior profiles", testBatteryModeRestore),
+            ("battery mode preserves an existing battery override", testBatteryPriorEnabled),
+            ("watchdog follows the recorded power mode", testWatchdogPowerMode),
             ("missing AC profile refuses change", testMissingACProfile),
             ("heartbeat touches ownership", testOwnershipHeartbeat),
             ("expired heartbeat restores", testExpiredHeartbeat),
@@ -324,6 +333,51 @@ struct CodexLidKeeperSelfTests {
         try expect(try fixture.pipeline.pendingCount() == 2)
     }
 
+    private static func testConcurrentEventCapacity() throws {
+        for round in 0..<8 {
+            let fixture = EventFixture(maximumPendingEventCount: 2)
+            let queue = DispatchQueue(
+                label: "capacity-test-\(round)",
+                attributes: .concurrent
+            )
+            let group = DispatchGroup()
+            let successes = LockedCounter()
+            let errors = LockedErrors()
+
+            for index in 0..<64 {
+                group.enter()
+                queue.async {
+                    defer { group.leave() }
+                    do {
+                        _ = try fixture.pipeline.enqueue(
+                            hookInput(
+                                session: "s\(round)-\(index)",
+                                turn: "t\(round)-\(index)",
+                                event: "UserPromptSubmit"
+                            ),
+                            occurredAt: testDate
+                        )
+                        successes.increment()
+                    } catch {
+                        errors.append(error)
+                    }
+                }
+            }
+            group.wait()
+
+            try expect(successes.value == 2)
+            try expect(errors.values.count == 62)
+            for error in errors.values {
+                guard case HookEventPipelineError.queueFull = error else {
+                    throw SelfTestFailure(
+                        "capacity race returned unexpected error: \(error)"
+                    )
+                }
+            }
+            try expect(try fixture.pipeline.pendingCount() == 2)
+        }
+    }
+
     private static func testDaemonIdle() throws {
         let fixture = EventFixture()
         let powerSource = MutablePowerSourceProvider(
@@ -410,6 +464,129 @@ struct CodexLidKeeperSelfTests {
         try expect(powerSource.readCount == 3)
     }
 
+    private static func testRuntimeTaskDetection() throws {
+        let fixture = try RuntimeDetectionFixture()
+        let detector = CodexRuntimeTaskDetector(
+            homeDirectory: fixture.homeDirectory
+        )
+        let detection = detector.detectActiveTasks(
+            now: Date(timeIntervalSince1970: 10_000),
+            maximumAge: 3_600
+        )
+
+        try expect(detection.sourceAvailable)
+        try expect(detection.activeTasks.count == 2)
+        try expect(
+            Set(detection.activeTasks.map(\.sessionID))
+                == Set(["thread-1", "thread-3"])
+        )
+        try expect(
+            Set(detection.activeTasks.map(\.projectName))
+                == Set(["alpha", "gamma"])
+        )
+        let first = try require(
+            detection.activeTasks.first { $0.sessionID == "thread-1" }
+        )
+        try expect(
+            first.startedAt == Date(timeIntervalSince1970: 9_800)
+        )
+        try expect(
+            first.lastActivityAt == Date(timeIntervalSince1970: 9_900)
+        )
+    }
+
+    private static func testRuntimeDaemonLifecycle() throws {
+        let fixture = EventFixture()
+        let powerSource = MutablePowerSourceProvider(
+            snapshot: PowerSnapshot(isOnACPower: true, batteryPercent: 80)
+        )
+        let controller = FakePowerController()
+        let lease = TaskLease(
+            id: HookProcessor.leaseID(sessionID: "runtime", turnID: "turn"),
+            sessionID: "runtime",
+            turnID: "turn",
+            projectName: "project",
+            startedAt: testDate,
+            lastActivityAt: testDate,
+            expiresAt: testDate.addingTimeInterval(3_600)
+        )
+        let detector = MutableRuntimeTaskDetector(
+            detection: RuntimeTaskDetection(
+                sourceAvailable: true,
+                activeTasks: [lease]
+            )
+        )
+        let coordinator = DaemonCoordinator(
+            eventDirectory: fixture.directory,
+            stateStore: fixture.store,
+            powerSourceProvider: powerSource,
+            powerController: controller,
+            runtimeTaskDetector: detector
+        )
+
+        let active = try coordinator.runCycle(
+            configuration: testConfiguration,
+            now: testDate
+        )
+        try expect(active.reconciliation?.decision == .active)
+        try expect(active.reconciliation?.activeLeaseCount == 1)
+        try expect(controller.owned)
+
+        detector.detection = RuntimeTaskDetection(
+            sourceAvailable: true,
+            activeTasks: []
+        )
+        let completed = try coordinator.runCycle(
+            configuration: testConfiguration,
+            now: testDate.addingTimeInterval(1)
+        )
+        try expect(completed.reconciliation?.decision == .noTasks)
+        try expect(completed.reconciliation?.activeLeaseCount == 0)
+        try expect(!controller.owned)
+    }
+
+    private static func testTaskDeduplication() throws {
+        let hook = TaskLease(
+            id: HookProcessor.leaseID(sessionID: "same", turnID: "old"),
+            sessionID: "same",
+            turnID: "old",
+            projectName: "hook",
+            startedAt: testDate,
+            lastActivityAt: testDate,
+            expiresAt: testDate.addingTimeInterval(3_600),
+            releaseAfter: testDate.addingTimeInterval(20)
+        )
+        let runtime = TaskLease(
+            id: HookProcessor.leaseID(sessionID: "same", turnID: "new"),
+            sessionID: "same",
+            turnID: "new",
+            projectName: "runtime",
+            startedAt: testDate.addingTimeInterval(10),
+            lastActivityAt: testDate.addingTimeInterval(10),
+            expiresAt: testDate.addingTimeInterval(3_600)
+        )
+        let other = TaskLease(
+            id: HookProcessor.leaseID(sessionID: "other", turnID: "turn"),
+            sessionID: "other",
+            turnID: "turn",
+            projectName: "other",
+            startedAt: testDate,
+            lastActivityAt: testDate,
+            expiresAt: testDate.addingTimeInterval(3_600)
+        )
+        let state = KeeperState(
+            leases: [hook.id: hook, other.id: other],
+            runtimeLeases: [runtime.id: runtime]
+        )
+
+        try expect(state.activeTaskLeases.count == 2)
+        try expect(
+            state.activeTaskLeases.first {
+                $0.sessionID == "same"
+            }?.turnID == "new"
+        )
+    }
+
     private static func testActiveAC() throws {
         var state = stateWithLease()
         let controller = FakePowerController()
@@ -452,6 +629,48 @@ struct CodexLidKeeperSelfTests {
             now: testDate
         )
         try expect(result.decision == .onBattery)
+        try expect(controller.restoreCount == 1)
+        try expect(!controller.owned)
+    }
+
+    private static func testBatteryAllowed() throws {
+        var state = stateWithLease()
+        let controller = FakePowerController()
+        let configuration = RuntimeConfiguration(
+            powerMode: .allowBattery
+        )
+        let result = KeeperReconciler.reconcile(
+            state: &state,
+            configuration: configuration,
+            powerSnapshot: PowerSnapshot(
+                isOnACPower: false,
+                batteryPercent: 80
+            ),
+            powerController: controller,
+            now: testDate
+        )
+        try expect(result.decision == .active)
+        try expect(controller.heartbeatCount == 1)
+        try expect(controller.owned)
+    }
+
+    private static func testBatteryChargeUnknown() throws {
+        var state = stateWithLease()
+        let controller = FakePowerController(owned: true)
+        let configuration = RuntimeConfiguration(
+            powerMode: .allowBattery
+        )
+        let result = KeeperReconciler.reconcile(
+            state: &state,
+            configuration: configuration,
+            powerSnapshot: PowerSnapshot(
+                isOnACPower: false,
+                batteryPercent: nil
+            ),
+            powerController: controller,
+            now: testDate
+        )
+        try expect(result.decision == .powerUnknown)
         try expect(controller.restoreCount == 1)
         try expect(!controller.owned)
     }
@@ -538,6 +757,95 @@ struct CodexLidKeeperSelfTests {
             fixture.runner.commands.map(\.arguments).last
                 == ["-c", "disablesleep", "0"]
         )
+    }
+
+    private static func testBatteryModeRestore() throws {
+        let fixture = try PowerFixture(
+            pmsetOutput:
+                "Battery Power:\n sleep 1\nAC Power:\n sleep 1\n"
+        )
+        try fixture.manager.enable(
+            mode: .allowBattery,
+            now: fixture.now
+        )
+        try fixture.manager.restore()
+        try expect(
+            fixture.runner.commands.map(\.arguments) == [
+                ["-g", "custom"],
+                ["-c", "disablesleep", "1"],
+                ["-b", "disablesleep", "1"],
+                ["-c", "disablesleep", "0"],
+                ["-b", "disablesleep", "0"]
+            ]
+        )
+    }
+
+    private static func testBatteryPriorEnabled() throws {
+        let fixture = try PowerFixture(
+            pmsetOutput:
+                "Battery Power:\n disablesleep 1\n sleep 1\nAC Power:\n sleep 1\n"
+        )
+        try fixture.manager.enable(
+            mode: .allowBattery,
+            now: fixture.now
+        )
+        try fixture.manager.restore()
+        try expect(
+            fixture.runner.commands.map(\.arguments) == [
+                ["-g", "custom"],
+                ["-c", "disablesleep", "1"],
+                ["-b", "disablesleep", "1"],
+                ["-c", "disablesleep", "0"]
+            ]
+        )
+    }
+
+    private static func testWatchdogPowerMode() throws {
+        let batteryFixture = try PowerFixture(
+            pmsetOutput:
+                "Battery Power:\n sleep 1\nAC Power:\n sleep 1\n"
+        )
+        try batteryFixture.manager.enable(
+            mode: .allowBattery,
+            now: batteryFixture.now
+        )
+        let kept = try batteryFixture.manager.restoreIfPowerUnsafe(
+            snapshot: PowerSnapshot(
+                isOnACPower: false,
+                batteryPercent: 80
+            )
+        )
+        try expect(!kept)
+        try expect(
+            FileManager.default.fileExists(
+                atPath: batteryFixture.marker.path
+            )
+        )
+        let lowBattery = try batteryFixture.manager.restoreIfPowerUnsafe(
+            snapshot: PowerSnapshot(
+                isOnACPower: false,
+                batteryPercent: 20
+            )
+        )
+        try expect(lowBattery)
+        try expect(
+            !FileManager.default.fileExists(
+                atPath: batteryFixture.marker.path
+            )
+        )
+
+        let acFixture = try PowerFixture(
+            pmsetOutput:
+                "Battery Power:\n sleep 1\nAC Power:\n sleep 1\n"
+        )
+        try acFixture.manager.enable(mode: .acOnly, now: acFixture.now)
+        let unplugged = try acFixture.manager.restoreIfPowerUnsafe(
+            snapshot: PowerSnapshot(
+                isOnACPower: false,
+                batteryPercent: 80
+            )
+        )
+        try expect(unplugged)
     }
 
     private static func testMissingACProfile() throws {
@@ -648,8 +956,39 @@ struct CodexLidKeeperSelfTests {
             try expect(state.recentEventIDs.isEmpty)
         }
         let rewritten = try String(contentsOf: fixture.stateFile, encoding: .utf8)
-        try expect(rewritten.contains("\"schemaVersion\" : 2"))
+        try expect(
+            rewritten.contains(
+                "\"schemaVersion\" : \(KeeperConstants.schemaVersion)"
+            )
+        )
         try expect(rewritten.contains("\"recentEventIDs\""))
+
+        let previewFixture = StoreFixture()
+        try FileManager.default.createDirectory(
+            at: previewFixture.directory,
+            withIntermediateDirectories: true
+        )
+        try Data(
+            """
+            {
+              "schemaVersion": 4,
+              "automationEnabled": true,
+              "runtimeLeases": {}
+            }
+            """.utf8
+        ).write(to: previewFixture.stateFile)
+        try previewFixture.store.update { state in
+            try expect(state.schemaVersion == KeeperConstants.schemaVersion)
+        }
+        let migratedPreview = try String(
+            contentsOf: previewFixture.stateFile,
+            encoding: .utf8
+        )
+        try expect(
+            migratedPreview.contains(
+                "\"schemaVersion\" : \(KeeperConstants.schemaVersion)"
+            )
+        )
     }
 
     private static func testLogRotation() throws {
@@ -817,6 +1156,7 @@ private final class FakePowerController: PowerControlling {
     var owned: Bool
     var heartbeatCount = 0
     var restoreCount = 0
+    var lastHeartbeatMode: GuardPowerMode?
     let heartbeatError: Error?
 
     init(owned: Bool = false, heartbeatError: Error? = nil) {
@@ -828,8 +1168,9 @@ private final class FakePowerController: PowerControlling {
         owned
     }
 
-    func heartbeat() throws {
+    func heartbeat(mode: GuardPowerMode) throws {
         heartbeatCount += 1
+        lastHeartbeatMode = mode
         if let heartbeatError {
             throw heartbeatError
         }
@@ -853,6 +1194,114 @@ private final class MutablePowerSourceProvider: PowerSourceProviding {
     func currentSnapshot() -> PowerSnapshot {
         readCount += 1
         return snapshot
+    }
+}
+
+private final class MutableRuntimeTaskDetector: RuntimeTaskDetecting {
+    var detection: RuntimeTaskDetection
+
+    init(detection: RuntimeTaskDetection) {
+        self.detection = detection
+    }
+
+    func detectActiveTasks(
+        now: Date,
+        maximumAge: TimeInterval
+    ) -> RuntimeTaskDetection {
+        detection
+    }
+}
+
+private final class RuntimeDetectionFixture {
+    let homeDirectory: URL
+
+    init() throws {
+        homeDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let codexDirectory = homeDirectory
+            .appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: codexDirectory,
+            withIntermediateDirectories: true
+        )
+
+        try Self.runSQLite(
+            database: codexDirectory.appendingPathComponent("logs_2.sqlite"),
+            sql: """
+                CREATE TABLE logs (
+                    ts INTEGER NOT NULL,
+                    ts_nanos INTEGER NOT NULL,
+                    target TEXT NOT NULL,
+                    feedback_log_body TEXT NOT NULL
+                );
+                CREATE INDEX idx_logs_ts ON logs(ts);
+                INSERT INTO logs VALUES (
+                    9800, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-1}:turn{ turn.id=turn-1 } needs_follow_up=true'
+                );
+                INSERT INTO logs VALUES (
+                    9900, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-1}:turn{ turn.id=turn-1 } model_needs_follow_up=true needs_follow_up=true'
+                );
+                INSERT INTO logs VALUES (
+                    9850, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-2}:turn{ turn.id=turn-2 } needs_follow_up=true'
+                );
+                INSERT INTO logs VALUES (
+                    9950, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-2}:turn{ turn.id=turn-2 } model_needs_follow_up=true needs_follow_up=false'
+                );
+                INSERT INTO logs VALUES (
+                    9700, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-3}:turn{ turn.id=old-turn } needs_follow_up=false'
+                );
+                INSERT INTO logs VALUES (
+                    9975, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-3}:turn{ turn.id=turn-3 } needs_follow_up=true'
+                );
+                INSERT INTO logs VALUES (
+                    9999, 1, 'unrelated',
+                    'private content is never selected'
+                );
+                """
+        )
+        try Self.runSQLite(
+            database: codexDirectory.appendingPathComponent("state_5.sqlite"),
+            sql: """
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    cwd TEXT NOT NULL
+                );
+                INSERT INTO threads VALUES ('thread-1', '/tmp/alpha');
+                INSERT INTO threads VALUES ('thread-2', '/tmp/beta');
+                INSERT INTO threads VALUES ('thread-3', '/tmp/gamma');
+                """
+        )
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: homeDirectory)
+    }
+
+    private static func runSQLite(database: URL, sql: String) throws {
+        let process = Process()
+        let input = Pipe()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [database.path]
+        process.standardInput = input
+        process.standardError = errors
+        try process.run()
+        input.fileHandleForWriting.write(Data(sql.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(
+                decoding: errors.fileHandleForReading.readDataToEndOfFile(),
+                as: UTF8.self
+            )
+            throw SelfTestFailure("sqlite fixture failed: \(message)")
+        }
     }
 }
 
@@ -971,6 +1420,23 @@ private final class LockedErrors {
     func append(_ error: Error) {
         lock.lock()
         storage.append(error)
+        lock.unlock()
+    }
+}
+
+private final class LockedCounter {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func increment() {
+        lock.lock()
+        storage += 1
         lock.unlock()
     }
 }
