@@ -1,90 +1,118 @@
 # Codex Lid Keeper
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](README.md) | 简体中文
 
-> **v0.1.0-alpha — 仅源码测试版**
+> **v0.1.0-alpha｜公开测试版，只提供源码**
 >
-> 请先阅读[测试指南](TESTING.md)和[安全策略](SECURITY.zh-CN.md)，并提前保存
-> “紧急恢复”命令。本版本不会分发未经签名的可执行文件。
+> 第一次使用请先看[测试指南](TESTING.md)和[安全说明](SECURITY.zh-CN.md)，
+> 并把紧急恢复命令记下来。本项目暂时不提供未经签名的二进制安装包。
 
-Codex Lid Keeper 是一个实验性的 macOS 辅助工具：当本地 Codex 正在工作时，
-它让合盖后的 MacBook 继续运行；最后一个任务结束后，再恢复用户原来的合盖
-睡眠设置。
+让 MacBook 合盖后继续跑本地 Codex 任务。任务结束，它会把系统原来的睡眠设置
+恢复回来。
 
-它采用保守的安全策略：
+## 先说风险
 
-- 必须连接交流电源。
-- 即使正在接电，电量低于 30% 也会恢复睡眠。
-- 每个任务都是可续期租约，并设置八小时硬过期时间。
-- 如果用户级 daemon 超过两分钟没有更新心跳，root watchdog 会恢复原设置。
-- Hook 只负责把最小生命周期事件原子写入队列，不等待 `sudo` 或电源协调。
-- 持久化内容仅包含 session、turn、事件、时间和项目名称，不保存提示词、
-  工具输入或模型输出。
+这个项目用到了 macOS 没有公开文档的 `pmset disablesleep`。系统升级后，
+这项设置可能失效，也可能出现行为变化。
 
-> **重要警告**
->
-> 本项目使用未公开的 `pmset disablesleep` 设置。Apple 可能在任何 macOS
-> 更新中改变或移除该行为。绝不能把正在运行且已合盖的 MacBook 放进包、内胆包、
-> 抽屉或其他通风不良的位置。
+**一定不要把合盖运行中的 MacBook 塞进背包、内胆包、抽屉或其他不通风的地方。**
+第一次实机测试请放在开阔桌面上，全程接电，并留意温度。
 
-## 当前范围
+## 它解决什么问题
 
-仓库包含一个可运行的无界面 MVP：
+有些本地 Codex 任务要跑很久：编译、测试、批量处理文件，或者等本地服务完成。
+人离开时合上屏幕，MacBook 通常会睡眠，任务也就停了。
 
-- 非阻塞 Codex 生命周期 Hook 和崩溃安全事件队列
-- 支持并行任务的租约状态机
-- 基于 IOKit 的原生电源与电量检测
-- root 所有的睡眠设置所有权记录
-- 非交互、精确命令级别的 sudo 权限边界
-- launchd 用户代理和 root 恢复 watchdog
-- `status`、`pause`、`resume`、`clear` 与紧急恢复命令
-- 安全合并和移除 Hook 的脚本
-- 零依赖 Swift 自测和隔离的 dry-run 集成测试
+Codex Lid Keeper 不会一直禁止睡眠。它只在下面几个条件同时满足时接管：
 
-当前不包含菜单栏界面、签名 App、notarization、DMG 或自动更新。不同 Mac 型号
-和 macOS 版本仍必须分别执行真实合盖验收。
+- Codex 还有任务在跑；
+- MacBook 正在接电；
+- 电量不低于安全线；
+- 后台守护进程工作正常。
 
-## 系统要求
+最后一个任务结束、拔掉电源、电量过低或心跳中断时，它都会退出接管，并恢复之前
+记录的设置。
+
+## 安全设计
+
+- **Hook 不碰 sudo。** Hook 只把最少量的任务事件写进本地队列，然后立即返回。
+- **多个任务分开记。** 同时跑几个 Codex 任务时，一个任务结束不会影响其他任务。
+- **不擅自写回 0。** 修改前先记录 AC 模式下原本的 `disablesleep` 值，恢复时
+  原样写回。
+- **只改接电配置。** 电池模式的配置不会被修改。
+- **有独立兜底。** root watchdog 发现心跳超时、断电或低电量时，会主动恢复。
+- **租约会过期。** 即使结束事件丢了，也不会永久保持唤醒。
+- **提权范围很窄。** sudoers 只放行 `power enable` 和 `power restore` 两条固定
+  命令。
+- **不保存聊天内容。** 提示词、模型回复、工具输入和工具输出都不会落盘。
+
+更多细节见[架构说明](docs/ARCHITECTURE.md)。
+
+## 目前做到了什么
+
+- 非阻塞的 Codex 生命周期 Hook
+- 支持并发任务的租约状态机
+- 原子事件队列和崩溃重放保护
+- 基于 IOKit 的接电与电量检测
+- 由 root 保存的原设置记录
+- 用户 LaunchAgent 与 root 恢复 LaunchDaemon
+- `status`、`pause`、`resume`、`clear`、紧急恢复和卸载命令
+- 35 项 Swift 自测、5 项 Hook 配置测试和隔离的 dry-run 集成测试
+
+还没有菜单栏界面、签名 App、notarization、DMG 和自动更新。不同 Mac 型号、不同
+macOS 版本的合盖表现，仍然需要实机验证。
+
+## 使用条件
 
 - macOS 13 或更高版本的 MacBook
-- 带 Swift 6 的 Apple Command Line Tools
-- 支持生命周期 Hooks 的当前 Codex 版本
-- 安装时可使用管理员账户
+- 安装了 Apple Command Line Tools，Swift 版本为 6
+- 当前版本的 Codex，并且支持生命周期 Hook
+- 安装时可以输入管理员密码
 
-Codex 会要求用户检查并信任新增或修改过的 command Hook；未经信任的 Hook 不会运行。
+安装完成后，Codex 会要求你检查并信任新增的 command Hook。没有手动信任之前，
+这些 Hook 不会运行。
 
-## 在不修改电源设置的情况下构建和测试
+## 先跑测试
 
-以下命令不会执行特权 `pmset` 操作：
+下面这些命令不会改动真实的 `pmset`：
 
 ```bash
-swift build
-swift run codex-lid-keeper-self-test
+./scripts/build.sh
 /usr/bin/python3 scripts/test_hooks_config.py
-/usr/bin/python3 scripts/test_e2e.py
+/usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
 ```
 
-集成测试使用隔离的临时 home 和 dry-run 电源标记。
+这个版本预期看到：
+
+```text
+35/35 self-tests passed
+Ran 5 tests ... OK
+non-blocking dry-run Hook lifecycle passed
+```
+
+集成测试使用临时目录和假的电源标记，不会开启真实的 sleep override。
 
 ## 安装
 
-先检查源码，再运行：
+先读一遍安装脚本，再执行：
 
 ```bash
 ./scripts/install.sh
 ```
 
-安装脚本会先构建并执行非特权自测，然后请求管理员权限。它会：
+安装脚本会先重新构建并跑完自测，然后才申请管理员权限。它会安装：
 
-1. 将 root 所有的可执行文件安装到
-   `/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper`；
-2. 安装 sudoers 规则，只允许该 root 可执行文件执行 `power enable` 与
-   `power restore`；
-3. 在 `/Library/LaunchDaemons` 安装 root 恢复 watchdog；
-4. 在 `~/Library/LaunchAgents` 安装用户级协调代理；
-5. 备份并合并五个生命周期处理器到 `~/.codex/hooks.json`。
+1. `/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper`
+2. 只允许两条固定命令的 sudoers 规则
+3. root 恢复用的 LaunchDaemon
+4. 当前用户的 LaunchAgent
+5. 五个 Codex 生命周期 Hook
 
-安装完成后，在 Codex 中打开 `/hooks`，检查并信任新增定义。
+现有的 `~/.codex/hooks.json` 会先备份，再合并，不会整份覆盖。
+
+安装结束后，在 Codex 里打开 `/hooks`，确认并信任新增的五个 Hook。
+
+## 日常使用
 
 查看状态：
 
@@ -92,106 +120,101 @@ swift run codex-lid-keeper-self-test
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper status
 ```
 
-## 命令
+可用命令：
 
 ```text
-status [--json]      显示租约、待处理事件、电源状态和最新决策
-pause                恢复本项目拥有的状态，并暂停后续激活
-resume               重新启用自动化
-clear                清除卡住的租约，不改变暂停/启用偏好
-emergency-restore    暂停、清除租约并立即恢复原设置
-config show          输出带安全边界的当前配置
+status [--json]      查看任务、待处理事件、电源状态和最近一次判断
+pause                暂停自动接管，并恢复当前由本项目修改的设置
+resume               重新启用自动接管
+clear                清掉卡住的任务记录，不改变暂停状态
+emergency-restore    立即暂停、清空任务并恢复设置
+config show          查看当前配置
 ```
 
-运行状态与日志位于：
+运行数据和日志保存在：
 
 ```text
 ~/Library/Application Support/CodexLidKeeper/
 ```
 
-生成的 `config.json` 支持：
+## 配置
 
-- `minimumBatteryPercent`：`30...100`，默认 `30`
-- `leaseDuration`：`60...86400` 秒，默认 `28800`
-- `releaseDelay`：`0...300` 秒，默认 `20`
-- `eventPollInterval`：`0.25...5` 秒，默认 `1`
-- `powerHeartbeatInterval`：`5...30` 秒，默认 `10`
+第一次运行会生成 `config.json`：
 
-当前 MVP 不能关闭“必须接电”这一要求。root watchdog 始终执行 30% 电量底线；
-配置只能收紧安全阈值，不能放宽。无效配置会以安全方式失败。旧版
-`pollInterval` 会在迁移时被解释为电源心跳间隔。
+- `minimumBatteryPercent`：最低电量，范围 `30...100`，默认 `30`
+- `leaseDuration`：任务最长保留时间，范围 `60...86400` 秒，默认 `28800`
+- `releaseDelay`：任务结束后的缓冲时间，范围 `0...300` 秒，默认 `20`
+- `eventPollInterval`：事件队列检查间隔，范围 `0.25...5` 秒，默认 `1`
+- `powerHeartbeatInterval`：电源心跳间隔，范围 `5...30` 秒，默认 `10`
 
-## 工作原理
+“必须接电”和“电量至少 30%”是安全底线，配置只能调得更保守，不能关闭。
+旧配置里的 `pollInterval` 会自动当作电源心跳间隔读取。
+
+## 它是怎么工作的
 
 ```text
-Codex 生命周期 Hook
-        │ 只解析必要字段
-        ▼
-私有原子事件队列 ── Hook 返回 {}
-        │
-        │ 用户代理每批最多消费 512 个事件
-        ▼
-幂等租约归约器 ──> 原子用户状态
-        │
-        │ 接电 + 电量安全 + 存在活跃租约
-        ▼
-root 电源辅助程序 ──> pmset -c disablesleep 1
-
-无租约 / 拔电 / 低电量 / 心跳过期
-        │
-        ▼
-恢复之前记录的 AC 配置
+Codex Hook
+    │ 只取任务 ID、事件、时间和项目名
+    ▼
+本地私有事件队列 ── Hook 立即返回 {}
+    │
+    ▼
+后台进程更新任务租约
+    │
+    ├─ 有任务 + 接电 + 电量安全 ──> 保持合盖运行
+    │
+    └─ 无任务 / 拔电 / 低电量 ───> 恢复原设置
 ```
 
-每个事件以私有 `0600` 文件原子提交；Hook 返回前会同步文件和所在目录。
-daemon 每秒检查队列，按时间顺序处理事件，并记住事件 ID，避免崩溃重放产生
-重复效果。队列最多保存 4,096 个文件；畸形、超大或超前五分钟以上的事件会被
-拒绝。`status` 会显示待处理数量。
+每条事件都会先写进权限为 `0600` 的独立文件，再原子提交。后台进程按时间顺序
+处理，并记住已经处理过的事件 ID，所以中途崩溃后重新读取也不会重复生效。
 
-辅助程序在修改 AC 配置前写入
-`/var/db/com.zundu.codex-lid-keeper.power.json`。该 root 所有的记录保存 AC
-配置中 `disablesleep` 原本是否开启。电池配置不会被修改，恢复时也不会盲目
-假设原值为 `0`。
+队列最多放 4,096 条事件；单条最大 64 KiB；时间比当前系统快五分钟以上的事件
+会被丢弃。空闲时后台进程只检查队列，不会每秒查询电源或反复改写状态文件。
 
-daemon 启动时协调一次；应用事件后立即协调；仅在存在租约或本项目拥有电源状态时
-每十秒维护一次。完全空闲后，每秒队列检查不会查询 IOKit，也不会重写
-`state.json`。单独的 root LaunchDaemon 每分钟检查一次，并在以下情况下恢复：
+真正修改电源前，root 辅助程序会把 AC 模式下原来的值写进：
 
-- 心跳超过两分钟；
-- 未接交流电，或无法判断电源状态；
-- 电量低于默认安全阈值。
+```text
+/var/db/com.zundu.codex-lid-keeper.power.json
+```
 
-## 手动合盖验收
+只有本项目留下了这份记录，程序才会认为这项设置归自己负责。
 
-自动测试故意不会修改真实睡眠设置。请在桌面、通风无遮挡的环境中测试：
+## 第一次实机测试
 
-1. 连接原装或规格合适的电源适配器。
-2. 启动一个会持续数分钟并产生可观察本地变化的 Codex 任务。
-3. 确认 `status` 显示活跃任务和 `Sleep override owned: yes`。
-4. 合盖两到五分钟。
-5. 开盖并确认任务与本地时间戳在合盖期间继续推进。
-6. 等待最后一个任务结束，再等待至少 20 秒，确认任务数为零且不再拥有 override。
-7. 再次合盖，确认系统恢复正常睡眠。
+不要上来就合盖。请按[完整测试指南](TESTING.md)依次完成：
 
-重大 macOS 更新后应重新执行验收。更完整的测试矩阵见
-[TESTING.md](TESTING.md)。
+1. 不安装的 dry-run 测试
+2. 安装后的开盖测试
+3. 并发任务、暂停、拔电和紧急恢复测试
+4. 最后才做桌面环境下的受控合盖测试
 
-## 紧急恢复
+合盖测试时：
 
-通常执行：
+- 放在无遮挡、通风好的桌面；
+- 全程接电；
+- 先只合盖两到五分钟；
+- 开盖后检查任务进度、网络和机身温度；
+- 任务结束后确认正常睡眠已经恢复。
+
+每次 macOS 大版本升级后，都建议重新测试。
+
+## 出问题先恢复
+
+仓库目录内执行：
 
 ```bash
 ./scripts/emergency-restore.sh
 ```
 
-或：
+安装后也可以直接执行：
 
 ```bash
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper emergency-restore
 ```
 
-紧急命令不依赖有效的 `config.json`。如果所有权记录损坏，程序会拒绝猜测原值；
-请检查该记录与 `pmset -g custom` 后再手动修改。
+这条命令不依赖 `config.json` 是否正常。如果 root 所有权记录已经损坏，程序不会
+猜原值，而是停下来报错。此时请先检查记录和 `pmset -g custom`。
 
 ## 卸载
 
@@ -199,48 +222,43 @@ daemon 启动时协调一次；应用事件后立即协调；仅在存在租约�
 ./scripts/uninstall.sh
 ```
 
-卸载会先恢复本项目拥有的电源状态，再移除辅助程序、sudoers、launchd 任务和
-Hook。用户日志与配置会被保留，并在终端中显示路径。
+卸载脚本会先恢复由本项目修改的电源设置，再移除 Helper、sudoers、launchd 项和
+Hook。日志与配置不会自动删除，脚本会把保留目录打印出来。
 
-## 安全与隐私
+## 隐私
 
-详见[中文安全策略](SECURITY.zh-CN.md)和 [SECURITY.md](SECURITY.md)：
+程序只保留任务识别和恢复所需的信息。它不会保存提示词、对话正文、模型回复、
+工具参数或工具输出。
 
-- sudo 授权的可执行文件及其父目录由 root 所有；
-- sudoers 只允许两组精确参数；
-- root 所有权记录不能由普通用户写入；
-- Hook 对 Codex 工作采用 fail-open，电源 watchdog 采用 fail-safe；
-- 不持久化提示词、对话、工具输入或工具输出。
+日志最大 1 MiB，轮转时只保留上一份。提交 Issue 前仍请自行检查日志，并删掉项目
+名称、路径或其他不想公开的信息。
 
-活动日志达到 1 MiB 后轮转，只保留上一代日志。
+## 已知限制
 
-## 状态与限制
+- 依赖未公开的 macOS 设置，Apple 随时可能改掉。
+- 合盖后的联网和散热表现会因机型而异。
+- 当前 Helper 是本机从源码构建的，没有签名和 notarization。
+- 还没有图形界面、通知、自动更新或机型兼容列表。
+- 这是公开 Alpha，不建议无人值守运行。
 
-本项目是实验软件，不属于 Apple 或 OpenAI：
+## 参与测试和开发
 
-- `pmset disablesleep` 未公开。
-- 合盖后的网络和散热表现会随硬件变化。
-- 正式分发应改用签名的 Service Management 特权 Helper。
-- 在目标 Mac 完成手动验收前，不对兼容性作保证。
-
-## 测试与贡献资料
-
-- [双语测试指南](TESTING.md)
+- [测试指南](TESTING.md)
 - [架构说明](docs/ARCHITECTURE.md)
-- [参与贡献](CONTRIBUTING.md)
-- [变更记录](CHANGELOG.md)
-- [中文安全策略](SECURITY.zh-CN.md)
+- [贡献指南](CONTRIBUTING.md)
+- [版本记录](CHANGELOG.md)
+- [安全说明](SECURITY.zh-CN.md)
 
 ## 致谢
 
-设计调研参考了：
+设计阶段参考了：
 
 - [Lu233/CodexAwake](https://github.com/Lu233/CodexAwake)
 - [Moarram/wake](https://github.com/Moarram/wake)
 - [Ami3466/claude-awake](https://github.com/Ami3466/claude-awake)
 
-本仓库未复制或打包这些项目的源码。
+仓库没有复制这些项目的源码。
 
 ## 许可证
 
-MIT，见 [LICENSE](LICENSE)。
+[MIT License](LICENSE)

@@ -1,6 +1,6 @@
 # Architecture / 架构说明
 
-[English](#english) | [简体中文](#简体中文)
+[English](#english) | [中文](#中文说明)
 
 ## English
 
@@ -108,60 +108,73 @@ only after a successful command. A malformed record is never guessed.
 User data is private to the current account. The ownership record is root-only.
 Prompts and tool payloads are not part of any persisted model.
 
-## 简体中文
+## 中文说明
 
-### 设计目标
+### 设计时先守住几条线
 
-- 跟踪真实 Codex 任务活动，而不是仅判断应用是否打开。
-- Hook 快速返回，不依赖提权。
-- 支持重叠的 session 与 turn。
-- 只恢复本项目明确拥有的电源状态。
-- 在事件丢失、进程崩溃、拔电、低电量或心跳过期后安全恢复。
-- 自动测试不能修改真实电源策略。
+- 判断依据是“Codex 有没有任务在跑”，不是“Codex 窗口开没开”；
+- Hook 只负责报信，不能在里面等 sudo；
+- 多个 session、多个 turn 要能同时存在，互不误伤；
+- 只恢复自己改过的设置，不能顺手覆盖用户原来的配置；
+- 丢事件、崩进程、拔电、低电量都要能收尾；
+- 自动测试绝不能碰开发机真实的电源设置。
 
-### 运行链路
+### 一条事件怎么走
 
-Hook 只解析必要字段并写入私有原子队列。`DaemonCoordinator.runCycle` 统一负责
-队列消费、启动恢复、维护调度、IOKit 采样、特权心跳和状态协调。CLI 不需要自己
-维护这些时序规则。
+Codex 调用 Hook 后，`HookProcessor` 只取任务识别所需的几个字段，
+`HookEventPipeline` 随即把事件写进私有队列。写完 Hook 就返回，不参与后面的
+电源判断。
 
-核心模块分工：
+后台的 `DaemonCoordinator.runCycle` 是整条运行链路的入口。它负责决定：
 
-- `HookProcessor`：解析 Hook 并生成规范事件；
-- `HookEventPipeline`：原子队列、验证、排序、重放 ID 和批量上限；
-- `LeaseReducer`：获取、续期、延迟释放、session 释放与硬过期；
-- `DaemonCoordinator`：决定何时需要状态与电源协调；
-- `KeeperReconciler`：把租约、配置和电源快照转成动作；
-- `PrivilegedPowerManager`：记录 AC 原值、启用、心跳与恢复；
-- `LockedStateStore`：跨进程序列化和原子持久化。
+- 现在要不要消费队列；
+- 启动时是否需要清理上次遗留的状态；
+- 什么时候读取 IOKit；
+- 什么时候续 root 心跳；
+- 什么时候让 `KeeperReconciler` 重新判断。
 
-### 权限接口
+这样，CLI 只负责循环调用，不需要自己拼一堆时间和状态条件。
 
-普通用户进程只能调用两条固定 sudo 命令：
+几个核心模块分别做这些事：
+
+- `HookProcessor`：把 Hook 输入整理成统一事件；
+- `HookEventPipeline`：写队列、校验、排序、去重和分批处理；
+- `LeaseReducer`：新增任务、续期、延迟结束和强制过期；
+- `DaemonCoordinator`：安排每一轮后台工作；
+- `KeeperReconciler`：结合任务、电源和配置，决定保持还是恢复；
+- `PrivilegedPowerManager`：记录原值、修改 AC 设置、续心跳和恢复；
+- `LockedStateStore`：保证多个进程不会把状态文件写乱。
+
+### sudo 边界
+
+普通用户进程只能通过 sudo 调两条固定命令：
 
 ```text
 power enable
 power restore
 ```
 
-获得授权的可执行文件及父目录由 root 所有，Hook 无法控制传入 root 的参数。
+被授权的程序和它所在的目录都归 root 管。Hook 不能追加参数，也不能让 root 去改
+别的设置。
 
-### 所有权协议
+### 怎么判断“这项设置归我管”
 
-第一次修改前，root 辅助程序读取 `pmset -g custom` 的 AC 区域，记录
-`disablesleep` 是否原本开启，写入 root 所有权记录，然后只修改 AC 配置。恢复时
-读取并写回原值，成功后才删除记录。记录损坏时拒绝猜测。
+第一次修改前，root Helper 会读取 `pmset -g custom` 的 AC 部分，把
+`disablesleep` 原值写进 root 所有的记录文件，然后才执行修改。
 
-### 故障恢复
+恢复时先读记录，再写回原值。命令成功以后才删除记录。如果记录坏了，就报错停下，
+绝不猜一个值硬写。
 
-- Hook 超时或队列满：Codex 继续运行，已有电源状态仍受 watchdog 保护。
-- daemon 在保存状态后崩溃：事件重放 ID 防止重复语义。
-- daemon 消失：root watchdog 在心跳过期后恢复。
-- 拔电或低电量：用户协调器恢复，root watchdog 也会独立检查。
-- 生命周期事件丢失：租约最终硬过期。
-- 事件时间超前过多：拒绝该事件。
-- 所有权记录损坏：报错并拒绝猜测。
-- 配置无效：daemon 安全失败，紧急恢复仍可用。
+### 各种故障会怎样
 
-持久化目录不包含提示词或工具载荷；用户状态仅当前账户可访问，电源所有权记录仅
-root 可访问。
+- **Hook 超时或队列满：** 不拦 Codex；已经接管的电源状态继续由 watchdog 兜底。
+- **保存状态后 daemon 崩了：** 重启后可能重读事件，但事件 ID 会拦住重复执行。
+- **daemon 一直没回来：** root watchdog 等心跳过期后恢复。
+- **运行中拔电或电量过低：** 正常后台会恢复，root watchdog 也会单独检查。
+- **结束事件丢了：** 租约到最长时间后自动过期。
+- **事件时间明显不对：** 比本机快五分钟以上就直接丢弃。
+- **所有权记录损坏：** 报错，不猜原值。
+- **配置文件写坏了：** 后台停止接管，但紧急恢复命令仍然可用。
+
+用户目录里只保存任务识别、配置、状态和日志，不保存提示词或工具内容。root
+所有权记录只有 root 能访问。

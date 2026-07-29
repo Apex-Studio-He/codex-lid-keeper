@@ -1,5 +1,5 @@
 name: "Feature request / 功能建议"
-description: "Suggest a scoped improvement / 提议范围明确的改进"
+description: "Suggest a focused improvement / 说说你希望它解决什么问题"
 title: "[Feature] "
 labels:
   - enhancement
@@ -22,19 +22,19 @@ body:
   - type: textarea
     id: outcome
     attributes:
-      label: "Desired outcome / 期望结果"
+      label: "Desired outcome / 你希望最后变成什么样"
     validations:
       required: true
 
   - type: textarea
     id: safety
     attributes:
-      label: "Safety and recovery impact / 安全与恢复影响"
-      description: "Consider privilege, battery, thermal, and rollback behavior / 考虑权限、电量、散热与回滚"
+      label: "Safety and recovery impact / 会不会影响权限、电源或恢复流程"
+      description: "Consider privilege, battery, thermal, and rollback behavior / 请顺带考虑电量、散热和出错后的收尾"
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: "Alternatives considered / 考虑过的替代方案"
+      label: "Alternatives considered / 你还考虑过哪些做法"
