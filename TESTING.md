@@ -1,6 +1,6 @@
 # Alpha Testing Guide / Alpha 测试指南
 
-[English](#english) | [简体中文](#简体中文)
+[English](#english) | [中文](#中文测试说明)
 
 This guide is for `v0.1.0-alpha`. The release is source-only and experimental.
 It modifies a privileged, undocumented macOS power setting after installation.
@@ -240,50 +240,52 @@ the user data directory and prints its location.
 
 ---
 
-## 简体中文
+## 中文测试说明
 
-### 安全规则
+### 先把底线说清楚
 
-- 只在桌面等坚硬、开放且通风良好的表面测试。
-- 使用规格合适的电源适配器，并保持接电。
-- 禁止在包、内胆包、抽屉、床、沙发或封闭置物架中测试。
-- 第一次测试不能无人看管。
-- 安装前先保存紧急恢复命令。
-- 如果机身异常发热、电源行为不明确或所有权记录无法解析，立即停止测试。
+- MacBook 要放在坚硬、平整、四周通风的桌面上。
+- 全程接一个规格合适的电源适配器。
+- 不要在背包、内胆包、抽屉、床、沙发或封闭柜子里试。
+- 第一次测试请人在旁边看着。
+- 安装前先把紧急恢复命令复制到手边。
+- 发现机身明显发热、电源状态说不清，或者所有权记录报错，立刻停止。
 
-紧急恢复：
+紧急恢复命令：
 
 ```bash
 ./scripts/emergency-restore.sh
 ```
 
-安装路径备用命令：
+如果已经安装，也可以执行：
 
 ```bash
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper emergency-restore
 ```
 
-### Alpha 测试需要回答什么
+### 我们想从 Alpha 测试里确认什么
 
-我们需要收集以下真实硬件信息：
+自动测试已经覆盖了状态机和恢复逻辑，但下面这些事情必须靠真实机器才能知道：
 
-1. 合盖时本地 Codex 任务是否继续推进；
-2. 不同 MacBook 型号合盖后的网络是否可用；
-3. 原来的 AC `disablesleep` 状态能否可靠恢复；
-4. 不同 macOS 版本的 launchd 与 Hook 行为是否不同；
-5. 放在开放桌面时散热是否可接受。
+1. 合盖以后，本地 Codex 任务是不是真的还在往前跑；
+2. 不同 MacBook 的网络连接能不能保持；
+3. 任务结束后，原来的 AC 睡眠设置能不能完整恢复；
+4. 不同 macOS 版本上的 Hook 和 launchd 是否有差异；
+5. 在开放桌面上运行时，温度是否正常。
 
-本版本明确不支持在包或其他封闭环境中运行。
+“塞进包里继续跑”不在测试范围内，也不会得到支持。
 
-### 前置条件
+### 测试前准备
+
+你需要：
 
 - macOS 13 或更高版本的 MacBook
-- 带 Swift 6 的 Apple Command Line Tools
-- 支持生命周期 Hooks 的当前 Codex
-- 安装时可使用管理员权限
-- 一个能从本地观察进度的测试任务
+- Swift 6 和 Apple Command Line Tools
+- 支持生命周期 Hook 的 Codex
+- 安装时可以输入管理员密码
+- 一个能看出进度的测试任务，例如持续写时间戳、编译或跑测试
 
-报告问题前记录：
+先记下环境信息，后面反馈问题时会用到：
 
 ```bash
 sw_vers
@@ -292,11 +294,9 @@ swift --version
 codex --version
 ```
 
-不要公开完整 Hook 文件、提示词、对话内容或未经清理的个人路径。
+不要把完整 Hook 文件、提示词、聊天内容或没有打码的个人路径发到公开 Issue。
 
-### 阶段 A — 非特权预检
-
-安装前执行：
+### 第一步：安装前先跑自测
 
 ```bash
 ./scripts/build.sh
@@ -304,60 +304,66 @@ codex --version
 /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
 ```
 
-本版本预期看到：
+这个版本正常情况下会看到：
 
 - `35/35 self-tests passed`
 - `Ran 5 tests ... OK`
 - `non-blocking dry-run Hook lifecycle passed`
 
-这些测试只使用 fake 或隔离的 dry-run home，不会开启真实睡眠 override。
+这些命令只会使用 fake 和临时目录，不会去改真实的 `pmset`。
 
-记录安装前的电源配置：
+再把安装前的电源配置记下来：
 
 ```bash
 pmset -g custom
 ```
 
-如果 AC 配置中原本已有 `disablesleep 1`，请在报告中注明。本项目应保留原值，
-而不是强制写回 `0`。
+如果 AC 那一段本来就有 `disablesleep 1`，反馈时请注明。程序应该保留这个原值，
+而不是卸载时强行改成 `0`。
 
-### 阶段 B — 检查并安装
+### 第二步：看过代码再安装
 
-至少检查：
+建议至少看一遍：
 
 - `scripts/install.sh`
 - `scripts/uninstall.sh`
 - `scripts/hooks_config.py`
-- 两个 `Resources/*.plist`
-- `SECURITY.zh-CN.md`
+- `Resources/` 里的两个 plist
+- [安全说明](SECURITY.zh-CN.md)
 
-然后运行：
+确认没有问题后再运行：
 
 ```bash
 ./scripts/install.sh
 ```
 
-安装后在 Codex 中打开 `/hooks`，检查并信任新增 Hook。未经信任的 command Hook
-会被 Codex 跳过。
+安装完成后，在 Codex 里输入 `/hooks`。你会看到五个新增 Hook，需要逐个确认并
+信任；不信任的话，Codex 不会执行它们。
 
-### 阶段 C — 开盖功能矩阵
+### 第三步：先别合盖
 
-查看状态：
+先用下面的命令观察状态：
 
 ```bash
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper status
 ```
 
-#### T1. 单任务生命周期
+#### T1：单个任务
 
-启动一个任务，确认活跃任务数为 1 且拥有 sleep override；任务结束后等待至少
-20 秒，确认任务数为零且 override 已恢复。
+1. 启动一个 Codex 任务。
+2. 确认 `Active tasks: 1`。
+3. 确认 `Sleep override owned: yes`。
+4. 等任务结束，再等至少 20 秒。
+5. 确认任务数回到 0，`Sleep override owned` 变成 `no`。
 
-#### T2. 并行任务
+#### T2：同时跑两个任务
 
-启动两个重叠任务。第一个结束时 override 必须保持；第二个也结束后才能恢复。
+1. 让两个 Codex 任务有一段重叠时间。
+2. 确认状态里能看到两个任务。
+3. 先结束其中一个，睡眠接管应该继续保持。
+4. 第二个也结束后，才应该恢复系统原来的设置。
 
-#### T3. 暂停、恢复和清理
+#### T3：暂停、恢复和清理
 
 ```bash
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper pause
@@ -365,44 +371,47 @@ pmset -g custom
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper clear
 ```
 
-确认 `pause` 会恢复电源，`resume` 允许之后重新激活，`clear` 清除卡住租约但不
-偷偷改变暂停偏好。
+- `pause` 应该立即退出当前接管；
+- `resume` 之后，新任务应该可以再次触发；
+- `clear` 只清理卡住的任务记录，不应该擅自切换暂停状态。
 
-#### T4. 拔掉交流电
+#### T4：任务运行时拔电
 
-活跃租约存在时拔掉外接电源。维护周期内应恢复 override，并显示正在使用电池。
-继续测试前重新接电；禁止在电池模式下执行合盖测试。
+保持一个任务在运行，然后拔掉外接电源。十秒左右，程序应该退出睡眠接管，状态里
+也应该显示正在使用电池。
 
-#### T5. 紧急恢复
+测完马上重新接电。不要在电池模式下继续做合盖测试。
 
-存在测试租约时执行：
+#### T5：紧急恢复
+
+保持一个测试任务在运行，然后执行：
 
 ```bash
 ./scripts/emergency-restore.sh
 ```
 
-确认自动化已暂停、租约已清除且不再拥有 override。
+确认三件事：自动运行已暂停、任务记录已清空、睡眠设置已经恢复。
 
-### 阶段 D — 受控合盖测试
+### 第四步：再做合盖测试
 
-只有阶段 C 全部通过后才能继续：
+前面的 T1—T5 全部正常，才能继续：
 
-1. 把 MacBook 放在无遮挡的开放桌面。
-2. 连接规格合适的电源。
-3. 启动一个至少运行五分钟、会写时间戳或产生其他可观察进度的任务。
-4. 确认状态显示活跃租约和已拥有 override。
+1. 把 MacBook 放在通风无遮挡的桌面上。
+2. 接好电源。
+3. 启动一个至少持续五分钟、能看出进度的 Codex 任务。
+4. 确认状态显示有活跃任务，而且 `Sleep override owned: yes`。
 5. 合盖两到五分钟。
-6. 开盖，确认任务在合盖期间继续推进。
-7. 检查温度和网络表现。
-8. 等最后一个任务结束后再等待至少 20 秒。
-9. 确认 override 已恢复。
-10. 再次合盖，确认正常睡眠恢复。
+6. 开盖，检查任务是否在这段时间继续推进。
+7. 检查网络是否正常，机身有没有异常发热。
+8. 等最后一个任务结束，再等至少 20 秒。
+9. 确认 `Sleep override owned: no`。
+10. 再次合盖，确认 MacBook 恢复正常睡眠。
 
-重大 macOS 更新后应重新测试。单一机型通过不代表所有机型兼容。
+macOS 大版本升级后建议重新测一次。一台机器通过，不代表所有机型都没问题。
 
-### 诊断信息与问题报告
+### 反馈问题时带上这些信息
 
-上传前清理路径和标识符：
+下面几条命令通常够用。贴到 Issue 前，先把路径和 ID 打码：
 
 ```bash
 /Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper status --json
@@ -411,16 +420,24 @@ launchctl print "gui/$(id -u)/com.zundu.codex-lid-keeper.agent"
 sudo launchctl print system/com.zundu.codex-lid-keeper.recovery
 ```
 
-日志位于：
+日志在：
 
 ```text
 ~/Library/Application Support/CodexLidKeeper/keeper.log
 ```
 
-报告中请包含 Mac 型号、macOS/Codex 版本、是否接电、电量、测试编号、预期与
-实际行为、清理后的状态输出、紧急恢复是否成功，以及真实电源设置是否变化。
+Issue 里请写清楚：
 
-安全问题请使用 GitHub Security Advisory 私下报告。
+- Mac 型号、macOS 版本、芯片架构和 Codex 版本
+- 当时是否接电、电量是多少
+- 做到了 T1—T5 的哪一步，还是合盖测试
+- 你原本期待什么，实际发生了什么
+- 打码后的 `status --json`
+- 紧急恢复有没有成功
+- `pmset` 有没有出现意外变化
+
+程序不会主动记录提示词和工具参数，但上传日志前仍要自己检查一遍。
+安全漏洞请通过 GitHub Security Advisory 私下报告。
 
 ### 卸载
 
@@ -428,4 +445,5 @@ sudo launchctl print system/com.zundu.codex-lid-keeper.recovery
 ./scripts/uninstall.sh
 ```
 
-脚本会先恢复本项目拥有的电源状态，再移除系统集成。用户数据目录会保留并输出路径。
+卸载脚本会先恢复由本项目修改的电源设置，再移除 Helper、sudoers、launchd 项和
+Hook。日志与配置会保留，脚本会把目录位置打印出来。
