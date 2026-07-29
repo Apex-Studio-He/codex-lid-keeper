@@ -1,0 +1,116 @@
+name: "Bug report / 问题反馈"
+description: "Report an Alpha test failure or regression / 报告 Alpha 测试故障或回归"
+title: "[Bug] "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Do not include prompts, transcripts, secrets, session IDs, or personal paths.
+        感谢测试。请勿提交提示词、对话、密钥、session ID 或个人路径。
+
+        Security issues must be reported privately through GitHub Security Advisories.
+        安全问题必须通过 GitHub Security Advisory 私下报告。
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: "Safety checks / 安全确认"
+      options:
+        - label: "I tested on an open, ventilated surface / 我在开放通风表面测试"
+          required: true
+        - label: "I removed sensitive content from this report / 我已删除敏感内容"
+          required: true
+        - label: "I know how to run emergency restore / 我知道如何执行紧急恢复"
+          required: true
+
+  - type: input
+    id: mac
+    attributes:
+      label: "Mac model / Mac 型号"
+      placeholder: "Example: MacBookPro18,3 / 14-inch MacBook Pro (2021)"
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: "macOS version / macOS 版本"
+      placeholder: "Output of sw_vers, without personal paths"
+    validations:
+      required: true
+
+  - type: input
+    id: codex
+    attributes:
+      label: "Codex version / Codex 版本"
+      placeholder: "Output of codex --version"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: test_case
+    attributes:
+      label: "Test case / 测试项目"
+      options:
+        - "Build or install / 构建或安装"
+        - "T1 single task / 单任务"
+        - "T2 parallel tasks / 并行任务"
+        - "T3 pause, resume, clear / 暂停、恢复、清理"
+        - "T4 AC removal / 拔掉交流电"
+        - "T5 emergency restore / 紧急恢复"
+        - "Controlled closed-lid test / 受控合盖测试"
+        - "Uninstall / 卸载"
+        - "Other / 其他"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Expected behavior / 预期行为"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: "Observed behavior / 实际行为"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Reproduction steps / 复现步骤"
+      description: "Prefer dry-run reproduction when possible / 尽可能使用 dry-run"
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: "Sanitized diagnostics / 已清理的诊断信息"
+      description: "Status output, AC/battery state, and relevant log lines only / 仅状态、电源与相关日志"
+      render: shell
+
+  - type: dropdown
+    id: restore
+    attributes:
+      label: "Did emergency restore work? / 紧急恢复是否成功？"
+      options:
+        - "Not attempted / 未尝试"
+        - "Yes / 成功"
+        - "No / 失败"
+    validations:
+      required: true
+
+  - type: textarea
+    id: power_changes
+    attributes:
+      label: "Live power-setting impact / 真实电源设置影响"
+      description: "State whether pmset changed unexpectedly / 说明 pmset 是否意外变化"
+    validations:
+      required: true

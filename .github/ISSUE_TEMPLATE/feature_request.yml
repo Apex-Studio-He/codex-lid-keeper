@@ -1,0 +1,40 @@
+name: "Feature request / 功能建议"
+description: "Suggest a scoped improvement / 提议范围明确的改进"
+title: "[Feature] "
+labels:
+  - enhancement
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please explain the user problem before proposing an implementation.
+        请先说明用户问题，再描述实现方案。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem / 问题"
+      description: "Who is affected and when? / 谁在什么情况下受到影响？"
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: "Desired outcome / 期望结果"
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: "Safety and recovery impact / 安全与恢复影响"
+      description: "Consider privilege, battery, thermal, and rollback behavior / 考虑权限、电量、散热与回滚"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives considered / 考虑过的替代方案"

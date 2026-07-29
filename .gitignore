@@ -1,0 +1,10 @@
+.build/
+.swiftpm/
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Local planning memory, not part of the distributable project.
+task_plan.md
+findings.md
+progress.md
