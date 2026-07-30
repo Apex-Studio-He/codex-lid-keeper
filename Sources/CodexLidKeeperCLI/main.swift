@@ -20,6 +20,9 @@ struct CodexLidKeeperMain {
         if command == "power" {
             return runPower(arguments: Array(arguments.dropFirst()))
         }
+        if command == "hooks" {
+            return runHooks(arguments: Array(arguments.dropFirst()))
+        }
 
         let context = RuntimeContext()
         if command == "hook" {
@@ -100,6 +103,89 @@ struct CodexLidKeeperMain {
             context.logger.append("hook result=ignored error=\(error)")
         }
         return 0
+    }
+
+    private static func runHooks(arguments: [String]) -> Int32 {
+        guard let action = arguments.first,
+              ["install", "remove", "verify"].contains(action) else {
+            fputs(
+                "Usage: codex-lid-keeper hooks {install|remove|verify} [--file PATH] [--command COMMAND]\n",
+                stderr
+            )
+            return 2
+        }
+
+        var file = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/hooks.json")
+        var hookCommand = "\(KeeperConstants.installedExecutable) hook"
+        var index = 1
+        while index < arguments.count {
+            guard index + 1 < arguments.count else {
+                fputs("Missing value for \(arguments[index]).\n", stderr)
+                return 2
+            }
+            switch arguments[index] {
+            case "--file":
+                file = URL(fileURLWithPath: arguments[index + 1])
+            case "--command":
+                hookCommand = arguments[index + 1]
+            default:
+                fputs("Unknown hooks option: \(arguments[index])\n", stderr)
+                return 2
+            }
+            index += 2
+        }
+
+        do {
+            switch action {
+            case "install":
+                let result = try HooksConfiguration.install(
+                    file: file,
+                    command: hookCommand
+                )
+                printHooksUpdate(result, file: file)
+            case "remove":
+                let result = try HooksConfiguration.remove(
+                    file: file,
+                    command: hookCommand
+                )
+                printHooksUpdate(result, file: file)
+            default:
+                let missing = try HooksConfiguration.verify(
+                    file: file,
+                    command: hookCommand
+                )
+                guard missing.isEmpty else {
+                    fputs(
+                        "Missing or duplicated events: \(missing.joined(separator: ", "))\n",
+                        stderr
+                    )
+                    return 1
+                }
+                print("Codex Lid Keeper Hooks are configured exactly once.")
+            }
+            return 0
+        } catch {
+            fputs(
+                "codex-lid-keeper hooks: \(error.localizedDescription)\n",
+                stderr
+            )
+            return 1
+        }
+    }
+
+    private static func printHooksUpdate(
+        _ result: HooksConfigurationUpdate,
+        file: URL
+    ) {
+        guard result.changed else {
+            print("Hooks already in the requested state.")
+            return
+        }
+        print("Updated \(file.path)")
+        if let backup = result.backup {
+            print("Backup: \(backup.path)")
+        }
     }
 
     private static func runDaemon(context: RuntimeContext, once: Bool) throws -> Int32 {
@@ -280,8 +366,10 @@ struct CodexLidKeeperMain {
         }
 
         let environment = ProcessInfo.processInfo.environment
-        let ownershipPath = environment["CODEX_LID_KEEPER_OWNERSHIP_FILE"]
-            ?? KeeperConstants.rootOwnershipFile
+        let ownershipPath = geteuid() == 0
+            ? KeeperConstants.rootOwnershipFile
+            : environment["CODEX_LID_KEEPER_OWNERSHIP_FILE"]
+                ?? KeeperConstants.rootOwnershipFile
         let manager = PrivilegedPowerManager(
             ownershipFile: URL(fileURLWithPath: ownershipPath)
         )
@@ -333,6 +421,7 @@ struct CodexLidKeeperMain {
             Usage: codex-lid-keeper <command>
 
               hook                 Queue one Codex Hook JSON object from stdin
+              hooks ...            Install, remove, or verify lifecycle Hooks
               daemon [--once]      Reconcile leases and power safety conditions
               status [--json]      Show current state without changing it
               pause                Stop automation and restore owned power state
@@ -389,14 +478,11 @@ private final class RuntimeContext {
                     .appendingPathComponent("dry-run-power-owned")
             )
         } else {
-            let helper = environment["CODEX_LID_KEEPER_HELPER"]
-                ?? KeeperConstants.installedExecutable
-            let ownership = environment["CODEX_LID_KEEPER_OWNERSHIP_FILE"]
-                .map { URL(fileURLWithPath: $0) }
-                ?? URL(fileURLWithPath: KeeperConstants.rootOwnershipFile)
             powerController = RootHelperPowerController(
-                executablePath: helper,
-                ownershipFile: ownership
+                executablePath: KeeperConstants.installedExecutable,
+                ownershipFile: URL(
+                    fileURLWithPath: KeeperConstants.rootOwnershipFile
+                )
             )
         }
     }

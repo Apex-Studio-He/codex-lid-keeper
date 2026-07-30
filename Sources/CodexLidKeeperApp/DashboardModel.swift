@@ -1,5 +1,6 @@
 import AppKit
 import CodexLidKeeperCore
+import Darwin
 import Foundation
 import UserNotifications
 
@@ -8,8 +9,12 @@ final class DashboardModel: ObservableObject {
     @Published private(set) var status: KeeperStatusSnapshot?
     @Published private(set) var errorMessage: String?
     @Published private(set) var hookInstallMessage: String?
+    @Published private(set) var hooksConfigurationError: String?
     @Published private(set) var isPreparedToClose = false
     @Published private(set) var helperInstalled = false
+    @Published private(set) var recoveryWatchdogLoaded = false
+    @Published private(set) var userAgentLoaded = false
+    @Published private(set) var powerHeartbeatFresh = false
     @Published private(set) var hooksInstalled = false
     @Published private(set) var brightnessAvailable = false
     @Published var dimWhenReady: Bool {
@@ -25,6 +30,8 @@ final class DashboardModel: ObservableObject {
     private let demoMode: Bool
     private var timer: Timer?
     private var previouslyWorking = false
+    private var lastRecoveryWatchdogCheck = Date.distantPast
+    private let recoveryWatchdogCheckInterval: TimeInterval = 10
 
     init() {
         controller = KeeperController()
@@ -36,7 +43,6 @@ final class DashboardModel: ObservableObject {
         } else {
             dimWhenReady = defaults.bool(forKey: dimPreferenceKey)
         }
-        refreshCapabilities()
         refresh()
         timer = Timer.scheduledTimer(
             withTimeInterval: 2,
@@ -52,23 +58,146 @@ final class DashboardModel: ObservableObject {
         timer?.invalidate()
     }
 
-    private func refreshCapabilities() {
+    private func refreshCapabilities(
+        forceWatchdogCheck: Bool = false
+    ) {
         helperInstalled = demoMode || FileManager.default.isExecutableFile(
             atPath: KeeperConstants.installedExecutable
         )
-        hooksInstalled = demoMode || readHooksInstalled()
+        if demoMode {
+            recoveryWatchdogLoaded = true
+            userAgentLoaded = true
+            powerHeartbeatFresh = true
+        } else if forceWatchdogCheck
+            || Date().timeIntervalSince(lastRecoveryWatchdogCheck)
+                >= recoveryWatchdogCheckInterval {
+            recoveryWatchdogLoaded = readRecoveryWatchdogLoaded()
+            userAgentLoaded = readUserAgentLoaded()
+            lastRecoveryWatchdogCheck = Date()
+        }
+        if demoMode {
+            hooksInstalled = true
+            hooksConfigurationError = nil
+        } else {
+            do {
+                hooksInstalled = try readHooksInstalled()
+                hooksConfigurationError = nil
+            } catch {
+                hooksInstalled = false
+                hooksConfigurationError = error.localizedDescription
+            }
+        }
         brightnessAvailable = demoMode
             || BrightnessController.shared.canControlBrightness
     }
 
-    private func readHooksInstalled() -> Bool {
+    private func readHooksInstalled() throws -> Bool {
         let hooks = controller.paths.homeDirectory
             .appendingPathComponent(".codex/hooks.json")
-        guard let data = try? Data(contentsOf: hooks),
-              let text = String(data: data, encoding: .utf8) else {
+        let command = "\(KeeperConstants.installedExecutable) hook"
+        return try HooksConfiguration.verify(
+            file: hooks,
+            command: command
+        ).isEmpty
+    }
+
+    private func readRecoveryWatchdogLoaded() -> Bool {
+        guard FileManager.default.isReadableFile(
+            atPath: KeeperConstants.recoveryDaemonPlist
+        ) else {
             return false
         }
-        return text.contains(KeeperConstants.integrationMarker)
+        return readLaunchdServiceLoaded(
+            "system/\(KeeperConstants.recoveryDaemonLabel)"
+        )
+    }
+
+    private func readUserAgentLoaded() -> Bool {
+        let plist = controller.paths.homeDirectory
+            .appendingPathComponent(
+                "Library/LaunchAgents/\(KeeperConstants.userAgentLabel).plist"
+            )
+        guard FileManager.default.isReadableFile(atPath: plist.path) else {
+            return false
+        }
+        guard let processIdentifier = readRunningLaunchdService(
+            "gui/\(getuid())/\(KeeperConstants.userAgentLabel)"
+        ) else {
+            return false
+        }
+        return LaunchdJobHealth.processIsAlive(processIdentifier)
+            && LaunchdJobHealth.daemonLockIsHeld(
+                at: controller.paths.daemonLockFile
+            )
+    }
+
+    private func readLaunchdServiceLoaded(_ service: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", service]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
+    private func readRunningLaunchdService(
+        _ service: String
+    ) -> Int32? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", service]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0,
+                  let text = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+            return LaunchdJobHealth.runningPID(
+                fromPrintOutput: text
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private func readPowerHeartbeatFresh(
+        for status: KeeperStatusSnapshot
+    ) -> Bool {
+        guard status.powerOwned else { return true }
+        let attributes = try? FileManager.default.attributesOfItem(
+            atPath: KeeperConstants.rootOwnershipFile
+        )
+        let modificationDate = attributes?[.modificationDate] as? Date
+        let maximumAge = min(
+            KeeperConstants.rootWatchdogMaximumAge - 10,
+            max(
+                30,
+                status.configuration.powerHeartbeatInterval * 2 + 5
+            )
+        )
+        return PowerHeartbeatHealth.isFresh(
+            modificationDate: modificationDate,
+            maximumAge: maximumAge
+        )
+    }
+
+    var recoveryProtectionReady: Bool {
+        recoveryWatchdogLoaded && powerHeartbeatFresh
+    }
+
+    var systemComponentsReady: Bool {
+        helperInstalled && recoveryProtectionReady && userAgentLoaded
     }
 
     var hookTrackingConfirmed: Bool {
@@ -82,7 +211,8 @@ final class DashboardModel: ObservableObject {
             && status.automationEnabled
             && status.decision == .active
             && status.powerOwned
-            && helperInstalled
+            && systemComponentsReady
+            && hooksInstalled
     }
 
     var menuSymbol: String {
@@ -111,8 +241,11 @@ final class DashboardModel: ObservableObject {
     }
 
     func refresh() {
+        refreshCapabilities()
         do {
             let newStatus = try controller.status()
+            powerHeartbeatFresh = demoMode
+                || readPowerHeartbeatFresh(for: newStatus)
             if status.map({
                 !displayEquivalent($0, newStatus)
             }) ?? true {
@@ -124,6 +257,8 @@ final class DashboardModel: ObservableObject {
                 && (
                     !newStatus.codexIsWorking
                         || newStatus.decision != .active
+                        || !systemComponentsReady
+                        || !hooksInstalled
                 ) {
                 cancelReadyMode()
             }
@@ -162,6 +297,11 @@ final class DashboardModel: ObservableObject {
     }
 
     func prepareToClose() {
+        refreshCapabilities(forceWatchdogCheck: true)
+        if let status {
+            powerHeartbeatFresh = demoMode
+                || readPowerHeartbeatFresh(for: status)
+        }
         guard readyToClose else { return }
         do {
             if dimWhenReady, !demoMode {
@@ -195,53 +335,38 @@ final class DashboardModel: ObservableObject {
     }
 
     func installHooksAndOpenCodex() {
-        guard helperInstalled else {
-            openInstallGuide()
-            return
-        }
-        guard let script = Bundle.main.url(
-            forResource: "hooks_config",
-            withExtension: "py"
-        ) else {
-            errorMessage = "App 内缺少 Hook 安装组件，请重新运行完整安装脚本。"
+        guard systemComponentsReady else {
+            openBundledInstaller()
             return
         }
 
         let hooks = controller.paths.homeDirectory
             .appendingPathComponent(".codex/hooks.json")
-        let process = Process()
-        let errors = Pipe()
-        process.executableURL = URL(
-            fileURLWithPath: "/usr/bin/python3"
-        )
-        process.arguments = [
-            script.path,
-            "install",
-            "--file",
-            hooks.path,
-            "--command",
-            "\(KeeperConstants.installedExecutable) hook",
-        ]
-        process.standardError = errors
         do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                let data = errors.fileHandleForReading.readDataToEndOfFile()
-                let detail = String(
-                    decoding: data,
-                    as: UTF8.self
-                ).trimmingCharacters(in: .whitespacesAndNewlines)
-                throw HookInstallError.failed(detail)
+            let command = "\(KeeperConstants.installedExecutable) hook"
+            let update = try HooksConfiguration.install(
+                file: hooks,
+                command: command
+            )
+            let missing = try HooksConfiguration.verify(
+                file: hooks,
+                command: command
+            )
+            guard missing.isEmpty else {
+                throw HookInstallError.failed(
+                    "以下事件缺失或重复：\(missing.joined(separator: "、"))"
+                )
             }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(
                 "/hooks",
                 forType: .string
             )
+            let backupText = update.backup == nil
+                ? ""
+                : "原配置已备份。"
             hookInstallMessage =
-                "Hook 已合并并备份原配置，/hooks 已复制到剪贴板。请在 Codex 中粘贴并信任五个新 Hook。"
-            refreshCapabilities()
+                "Hook 已合并。\(backupText)/hooks 已复制到剪贴板，请在 Codex 中粘贴并信任五个新 Hook。"
             refresh()
             openCodex()
         } catch {
@@ -259,6 +384,20 @@ final class DashboardModel: ObservableObject {
                 "https://github.com/Apex-Studio-He/codex-lid-keeper#install"
         ) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func openBundledInstaller() {
+        if let installer = Bundle.main.url(
+            forResource: "Install Codex Lid Keeper",
+            withExtension: "command"
+        ),
+           FileManager.default.isExecutableFile(atPath: installer.path),
+           NSWorkspace.shared.open(installer) {
+            return
+        }
+        errorMessage =
+            "当前 App 缺少完整安装组件，已为你打开 GitHub 安装说明。"
+        openInstallGuide()
     }
 
     private func perform(_ action: () throws -> Void) {

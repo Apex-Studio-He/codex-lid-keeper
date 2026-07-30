@@ -10,6 +10,15 @@ struct CodexLidKeeperSelfTests {
             ("session end accepts no turn id", testSessionEnd),
             ("turn event requires turn id", testMissingTurnID),
             ("oversized hook input is rejected", testOversizedInput),
+            ("Hook config preserves unrelated handlers", testHooksInstall),
+            ("Hook config install is idempotent", testHooksIdempotence),
+            ("Hook config verification is exact", testHooksVerification),
+            ("Hook config timeout verification is strict", testHooksTimeout),
+            ("Hook config removal is scoped", testHooksRemoval),
+            ("Hook config preserves empty unrelated groups", testHooksEmptyGroup),
+            ("Hook config serializes concurrent updates", testConcurrentHooksUpdates),
+            ("Hook config writes privately with backup", testHooksPrivateWrite),
+            ("Hook config reports read failures", testHooksReadFailure),
             ("parallel turns remain independent", testParallelTurns),
             ("stop delay can be cancelled", testStopDelayContinuation),
             ("renew recreates missed start", testRenewRecreatesLease),
@@ -50,6 +59,7 @@ struct CodexLidKeeperSelfTests {
             ("expired heartbeat restores", testExpiredHeartbeat),
             ("malformed ownership refuses guess", testMalformedOwnership),
             ("configuration rejects unsafe bounds", testConfigurationValidation),
+            ("runtime health checks fail closed", testRuntimeHealth),
             ("legacy configuration and state migrate", testLegacyMigration),
             ("log rotates within its size bound", testLogRotation),
             ("state round trip is private", testStateRoundTrip),
@@ -113,6 +123,449 @@ struct CodexLidKeeperSelfTests {
             throw SelfTestFailure("oversized input was accepted")
         } catch let error as HookProcessingError {
             try expect(error == .inputTooLarge)
+        }
+    }
+
+    private static func testHooksInstall() throws {
+        let fixture = try HooksConfigurationFixture(
+            document: [
+                "description": "personal hooks",
+                "hooks": [
+                    "Stop": [
+                        [
+                            "hooks": [
+                                [
+                                    "type": "command",
+                                    "command": "/tmp/existing",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+        )
+        defer { fixture.remove() }
+
+        let update = try HooksConfiguration.install(
+            file: fixture.file,
+            command: fixture.command
+        )
+        try expect(update.changed)
+        let document = try fixture.document()
+        try expect(document["description"] as? String == "personal hooks")
+        let commands = try fixture.commands(for: "Stop")
+        try expect(commands == ["/tmp/existing", fixture.command])
+        try expect(
+            try HooksConfiguration.verify(
+                file: fixture.file,
+                command: fixture.command
+            ).isEmpty
+        )
+    }
+
+    private static func testHooksIdempotence() throws {
+        let fixture = try HooksConfigurationFixture(document: [:])
+        defer { fixture.remove() }
+
+        _ = try HooksConfiguration.install(
+            file: fixture.file,
+            command: fixture.command
+        )
+        let before = try Data(contentsOf: fixture.file)
+        let update = try HooksConfiguration.install(
+            file: fixture.file,
+            command: fixture.command
+        )
+        try expect(!update.changed)
+        try expect(update.backup == nil)
+        try expect(try Data(contentsOf: fixture.file) == before)
+    }
+
+    private static func testHooksVerification() throws {
+        let fixture = try HooksConfigurationFixture(document: [:])
+        defer { fixture.remove() }
+
+        _ = try HooksConfiguration.install(
+            file: fixture.file,
+            command: fixture.command
+        )
+        var document = try fixture.document()
+        var hooks = try require(document["hooks"] as? [String: Any])
+        var stopGroups = try require(hooks["Stop"] as? [Any])
+        var firstGroup = try require(stopGroups.first as? [String: Any])
+        var handlers = try require(firstGroup["hooks"] as? [Any])
+        handlers.append([
+            "type": "command",
+            "command": fixture.command,
+            "timeout": 3,
+        ])
+        firstGroup["hooks"] = handlers
+        stopGroups[0] = firstGroup
+        hooks["Stop"] = stopGroups
+        document["hooks"] = hooks
+        try fixture.write(document)
+
+        try expect(
+            try HooksConfiguration.verify(
+                file: fixture.file,
+                command: fixture.command
+            ) == ["Stop"]
+        )
+
+        let malformedDocuments: [[String: Any]] = [
+            ["unexpected": true],
+            ["hooks": ["Stop": ["not-an-object"]]],
+            ["hooks": ["Stop": [["hooks": "not-an-array"]]]],
+            ["hooks": ["Stop": [["hooks": ["not-an-object"]]]]],
+            [
+                "hooks": [
+                    "SessionStart": [["matcher": 42]],
+                ],
+            ],
+            [
+                "hooks": [
+                    "PreCompact": [
+                        [
+                            "hooks": [
+                                ["type": "command"],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            [
+                "hooks": [
+                    "PermissionRequest": [
+                        [
+                            "hooks": [
+                                [
+                                    "type": "command",
+                                    "command": "/tmp/unrelated",
+                                    "async": "yes",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        for malformed in malformedDocuments {
+            let malformedFixture = try HooksConfigurationFixture(
+                document: malformed
+            )
+            defer { malformedFixture.remove() }
+            let before = try Data(contentsOf: malformedFixture.file)
+            do {
+                _ = try HooksConfiguration.install(
+                    file: malformedFixture.file,
+                    command: malformedFixture.command
+                )
+                throw SelfTestFailure(
+                    "malformed Hook sibling was accepted"
+                )
+            } catch let error as HooksConfigurationError {
+                switch error {
+                case .invalidGroup,
+                     .invalidHandlerList,
+                     .invalidHandler,
+                     .invalidSchema:
+                    break
+                default:
+                    throw error
+                }
+            }
+            try expect(
+                try Data(contentsOf: malformedFixture.file) == before
+            )
+        }
+    }
+
+    private static func testHooksTimeout() throws {
+        for invalidTimeout: Any in [1.9, true] {
+            let fixture = try HooksConfigurationFixture(document: [:])
+            defer { fixture.remove() }
+
+            _ = try HooksConfiguration.install(
+                file: fixture.file,
+                command: fixture.command
+            )
+            var document = try fixture.document()
+            var hooks = try require(document["hooks"] as? [String: Any])
+            var stopGroups = try require(hooks["Stop"] as? [Any])
+            var firstGroup = try require(stopGroups.first as? [String: Any])
+            var handlers = try require(firstGroup["hooks"] as? [Any])
+            var handler = try require(handlers.first as? [String: Any])
+            handler["timeout"] = invalidTimeout
+            handlers[0] = handler
+            firstGroup["hooks"] = handlers
+            stopGroups[0] = firstGroup
+            hooks["Stop"] = stopGroups
+            document["hooks"] = hooks
+            try fixture.write(document)
+
+            do {
+                _ = try HooksConfiguration.verify(
+                    file: fixture.file,
+                    command: fixture.command
+                )
+                throw SelfTestFailure(
+                    "invalid timeout type passed schema validation"
+                )
+            } catch HooksConfigurationError.invalidSchema(_) {
+                // Expected: Codex rejects this document before matching.
+            }
+        }
+
+        for field in ["timeout", "additionalContextLimit"] {
+            for rawValue in [
+                "-1",
+                "1.0",
+                "1e0",
+                "18446744073709551616",
+            ] {
+                let rawFixture = try HooksConfigurationFixture(document: [:])
+                defer { rawFixture.remove() }
+                let rawDocument = """
+                {
+                  "hooks": {
+                    "Stop": [{
+                      "hooks": [{
+                        "type": "command",
+                        "command": "\(rawFixture.command)",
+                        "\(field)": \(rawValue)
+                      }]
+                    }]
+                  }
+                }
+                """
+                try Data(rawDocument.utf8).write(to: rawFixture.file)
+                do {
+                    _ = try HooksConfiguration.verify(
+                        file: rawFixture.file,
+                        command: rawFixture.command
+                    )
+                    throw SelfTestFailure(
+                        "out-of-schema \(field) passed validation"
+                    )
+                } catch HooksConfigurationError.invalidSchema(_) {
+                    // Expected: official u64 fields are nonnegative integers.
+                }
+            }
+        }
+
+        let maximum = "18446744073709551615"
+        let maximumFixture = try HooksConfigurationFixture(document: [:])
+        defer { maximumFixture.remove() }
+        let maximumDocument = """
+        {
+          "hooks": {
+            "Stop": [{
+              "hooks": [{
+                "type": "command",
+                "command": "/tmp/unrelated",
+                "timeout": \(maximum),
+                "additionalContextLimit": \(maximum)
+              }]
+            }]
+          }
+        }
+        """
+        try Data(maximumDocument.utf8).write(to: maximumFixture.file)
+        _ = try HooksConfiguration.install(
+            file: maximumFixture.file,
+            command: maximumFixture.command
+        )
+        let written = try maximumFixture.document()
+        let maximumHooks = try require(
+            written["hooks"] as? [String: Any]
+        )
+        let maximumGroups = try require(
+            maximumHooks["Stop"] as? [Any]
+        )
+        let maximumGroup = try require(
+            maximumGroups.first as? [String: Any]
+        )
+        let maximumHandlers = try require(
+            maximumGroup["hooks"] as? [Any]
+        )
+        let maximumHandler = try require(
+            maximumHandlers.first as? [String: Any]
+        )
+        for field in ["timeout", "additionalContextLimit"] {
+            let number = try require(
+                maximumHandler[field] as? NSNumber
+            )
+            try expect(number.stringValue == maximum)
+        }
+    }
+
+    private static func testHooksRemoval() throws {
+        let fixture = try HooksConfigurationFixture(document: [:])
+        defer { fixture.remove() }
+
+        _ = try HooksConfiguration.install(
+            file: fixture.file,
+            command: fixture.command
+        )
+        var document = try fixture.document()
+        var hooks = try require(document["hooks"] as? [String: Any])
+        var stopGroups = try require(hooks["Stop"] as? [Any])
+        stopGroups.append([
+            "hooks": [
+                [
+                    "type": "command",
+                    "command": "/tmp/existing",
+                ],
+            ],
+        ])
+        hooks["Stop"] = stopGroups
+        document["hooks"] = hooks
+        try fixture.write(document)
+
+        let update = try HooksConfiguration.remove(
+            file: fixture.file,
+            command: fixture.command
+        )
+        try expect(update.changed)
+        try expect(try fixture.commands(for: "Stop") == ["/tmp/existing"])
+    }
+
+    private static func testHooksEmptyGroup() throws {
+        let fixture = try HooksConfigurationFixture(
+            document: [
+                "hooks": [
+                    "Stop": [
+                        [
+                            "matcher": "preserve-empty",
+                            "hooks": [],
+                        ],
+                        [
+                            "matcher": "preserve-missing-hooks",
+                        ],
+                    ],
+                ],
+            ]
+        )
+        defer { fixture.remove() }
+
+        _ = try HooksConfiguration.install(
+            file: fixture.file,
+            command: fixture.command
+        )
+        _ = try HooksConfiguration.remove(
+            file: fixture.file,
+            command: fixture.command
+        )
+
+        let document = try fixture.document()
+        let hooks = try require(document["hooks"] as? [String: Any])
+        let stopGroups = try require(hooks["Stop"] as? [Any])
+        let preserved = stopGroups.contains { value in
+            guard let group = value as? [String: Any],
+                  group["matcher"] as? String == "preserve-empty",
+                  let handlers = group["hooks"] as? [Any] else {
+                return false
+            }
+            return handlers.isEmpty
+        }
+        try expect(preserved)
+        let matcherOnlyPreserved = stopGroups.contains { value in
+            guard let group = value as? [String: Any] else {
+                return false
+            }
+            return group["matcher"] as? String
+                == "preserve-missing-hooks"
+                && group["hooks"] == nil
+        }
+        try expect(matcherOnlyPreserved)
+    }
+
+    private static func testConcurrentHooksUpdates() throws {
+        let fixture = try HooksConfigurationFixture(document: [:])
+        defer { fixture.remove() }
+        let commands = (0..<16).map { "/tmp/keeper-\($0) hook" }
+        let queue = DispatchQueue(
+            label: "hooks-configuration-test",
+            attributes: .concurrent
+        )
+        let group = DispatchGroup()
+        let errors = LockedErrors()
+
+        for command in commands {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                do {
+                    _ = try HooksConfiguration.install(
+                        file: fixture.file,
+                        command: command
+                    )
+                } catch {
+                    errors.append(error)
+                }
+            }
+        }
+        group.wait()
+
+        try expect(errors.values.isEmpty)
+        for command in commands {
+            try expect(
+                try HooksConfiguration.verify(
+                    file: fixture.file,
+                    command: command
+                ).isEmpty
+            )
+        }
+    }
+
+    private static func testHooksPrivateWrite() throws {
+        let fixture = try HooksConfigurationFixture(
+            document: ["hooks": [:]]
+        )
+        defer { fixture.remove() }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: fixture.file.path
+        )
+
+        let update = try HooksConfiguration.install(
+            file: fixture.file,
+            command: fixture.command
+        )
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: fixture.file.path
+        )
+        let permissions = attributes[.posixPermissions] as? NSNumber
+        try expect(permissions?.intValue == 0o600)
+        let backup = try require(update.backup)
+        let backupAttributes = try FileManager.default.attributesOfItem(
+            atPath: backup.path
+        )
+        let backupPermissions =
+            backupAttributes[.posixPermissions] as? NSNumber
+        try expect(backupPermissions?.intValue == 0o600)
+        let lock = fixture.directory.appendingPathComponent(
+            ".hooks.json.codex-lid-keeper.lock"
+        )
+        let lockAttributes = try FileManager.default.attributesOfItem(
+            atPath: lock.path
+        )
+        let lockPermissions = lockAttributes[.posixPermissions] as? NSNumber
+        try expect(lockPermissions?.intValue == 0o600)
+    }
+
+    private static func testHooksReadFailure() throws {
+        let fixture = try HooksConfigurationFixture(document: [:])
+        defer { fixture.remove() }
+
+        do {
+            _ = try HooksConfiguration.verify(
+                file: fixture.directory,
+                command: fixture.command
+            )
+            throw SelfTestFailure("Hook config directory was read as JSON")
+        } catch HooksConfigurationError.cannotRead(let path, _) {
+            try expect(path == fixture.directory.path)
         }
     }
 
@@ -1120,6 +1573,60 @@ struct CodexLidKeeperSelfTests {
         try expect(try RuntimeConfiguration.default.validated() == .default)
     }
 
+    private static func testRuntimeHealth() throws {
+        let running = """
+        gui/501/com.zundu.codex-lid-keeper.agent = {
+        \tstate = running
+        \tpid = 23493
+        \tlast exit code = 1
+        }
+        """
+        try expect(
+            LaunchdJobHealth.runningPID(
+                fromPrintOutput: running
+            ) == 23_493
+        )
+
+        for notRunning in [
+            "\tstate = not running\n",
+            "\tstate = spawn scheduled\n\tpid = 123\n",
+            "\tstate = running\n",
+            "\tstate = running\n\tpid = 0\n",
+            "\tstate = running\n\tpid = invalid\n",
+            "\tstate = running\n\tpid = 1\n\tpid = 2\n",
+            "\tstate = running\n\tstate = waiting\n\tpid = 1\n",
+            "\t\tstate = running\n\t\tpid = 123\n",
+        ] {
+            try expect(
+                LaunchdJobHealth.runningPID(
+                    fromPrintOutput: notRunning
+                ) == nil
+            )
+        }
+
+        let now = Date(timeIntervalSince1970: 1_000)
+        try expect(
+            PowerHeartbeatHealth.isFresh(
+                modificationDate: now.addingTimeInterval(-30),
+                now: now,
+                maximumAge: 30
+            )
+        )
+        for invalidDate in [
+            Optional<Date>.none,
+            now.addingTimeInterval(-30.001),
+            now.addingTimeInterval(0.001),
+        ] {
+            try expect(
+                !PowerHeartbeatHealth.isFresh(
+                    modificationDate: invalidDate,
+                    now: now,
+                    maximumAge: 30
+                )
+            )
+        }
+    }
+
     private static func testLegacyMigration() throws {
         let legacyConfiguration = Data(
             """
@@ -1349,6 +1856,70 @@ private struct SelfTestFailure: Error, CustomStringConvertible {
 
     init(_ description: String) {
         self.description = description
+    }
+}
+
+private final class HooksConfigurationFixture {
+    let directory: URL
+    let file: URL
+    let command =
+        "/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper hook"
+
+    init(document: [String: Any]) throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        file = directory.appendingPathComponent("hooks.json")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try write(document)
+    }
+
+    func document() throws -> [String: Any] {
+        let data = try Data(contentsOf: file)
+        guard let document = try JSONSerialization.jsonObject(
+            with: data
+        ) as? [String: Any] else {
+            throw SelfTestFailure("Hook fixture was not a JSON object")
+        }
+        return document
+    }
+
+    func commands(for event: String) throws -> [String] {
+        let document = try document()
+        let hooks = try Self.requireValue(
+            document["hooks"] as? [String: Any]
+        )
+        let groups = try Self.requireValue(hooks[event] as? [Any])
+        return groups.flatMap { value -> [String] in
+            guard let group = value as? [String: Any],
+                  let handlers = group["hooks"] as? [Any] else {
+                return []
+            }
+            return handlers.compactMap {
+                ($0 as? [String: Any])?["command"] as? String
+            }
+        }
+    }
+
+    func write(_ document: [String: Any]) throws {
+        let data = try JSONSerialization.data(
+            withJSONObject: document,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+        try data.write(to: file)
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private static func requireValue<T>(_ value: T?) throws -> T {
+        guard let value else {
+            throw SelfTestFailure("Hook fixture value was missing")
+        }
+        return value
     }
 }
 

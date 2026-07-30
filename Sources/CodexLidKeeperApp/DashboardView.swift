@@ -179,29 +179,40 @@ struct DashboardView: View {
             ReadinessRail(
                 status: status,
                 helperInstalled: model.helperInstalled,
+                recoveryWatchdogLoaded: model.recoveryProtectionReady,
+                userAgentLoaded: model.userAgentLoaded,
                 hooksInstalled: model.hooksInstalled,
                 hookTrackingConfirmed: model.hookTrackingConfirmed
             )
-            if !model.hooksInstalled {
+            if let error = model.hooksConfigurationError {
+                Label(
+                    "无法读取 Hooks 配置：\(error)",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            if !model.systemComponentsReady || !model.hooksInstalled {
                 Divider()
                 Button {
                     model.installHooksAndOpenCodex()
                 } label: {
                     Label(
-                        model.helperInstalled
+                        model.systemComponentsReady
                             ? "安装 Hooks 并打开 Codex"
-                            : "查看完整安装方法",
-                        systemImage: model.helperInstalled
+                            : "安装或修复系统组件",
+                        systemImage: model.systemComponentsReady
                             ? "link.badge.plus"
-                            : "arrow.up.forward.app"
+                            : "terminal"
                     )
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 Text(
-                    model.helperInstalled
+                    model.systemComponentsReady
                         ? "会先备份现有配置，再合并五个任务生命周期 Hook。"
-                        : "root Helper 尚未安装，需要先运行完整安装脚本。"
+                        : "会在终端里请求管理员权限，安装或修复 Helper、恢复守护和 Hooks。"
                 )
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)

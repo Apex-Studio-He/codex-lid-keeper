@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import ServiceManagement
 import SwiftUI
 import UserNotifications
@@ -40,9 +41,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(
         _ notification: Notification
     ) {
+        if CommandLine.arguments.contains("--unregister-login-item") {
+            do {
+                try LoginItemManager.shared.setEnabled(false)
+                Darwin.exit(EXIT_SUCCESS)
+            } catch {
+                let message =
+                    "Unable to unregister the login item: \(error)\n"
+                FileHandle.standardError.write(Data(message.utf8))
+                Darwin.exit(EXIT_FAILURE)
+            }
+        }
         NSApp.setActivationPolicy(.regular)
         BrightnessController.shared.restoreIfNeeded()
-        LoginItemManager.shared.registerIfNeeded()
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .sound]
         ) { _, _ in }
@@ -58,13 +69,6 @@ final class LoginItemManager {
 
     var isEnabled: Bool {
         SMAppService.mainApp.status == .enabled
-    }
-
-    func registerIfNeeded() {
-        guard SMAppService.mainApp.status == .notRegistered else {
-            return
-        }
-        try? SMAppService.mainApp.register()
     }
 
     func setEnabled(_ enabled: Bool) throws {

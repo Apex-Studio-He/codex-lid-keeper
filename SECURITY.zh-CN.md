@@ -58,7 +58,8 @@ AC / 电池配置。这个记录保存在：
 - 系统无法确认当前电源状态；
 - 电量低于不可降低的 30% 硬底线。
 
-任务本身也有最长八小时的硬过期时间，避免某个结束事件丢失后一直保持唤醒。
+任务租约在最近一次有效活动后最长保留八小时；持续活动会续期，长期收不到新活动
+或结束事件时也不会无限保持唤醒。
 
 ## Hook 会保存什么
 
@@ -69,8 +70,8 @@ Hook 从标准输入读取 JSON，大小上限是 1 MiB。它只读取：
 - `cwd`
 - `hook_event_name`
 
-`cwd` 写入前只保留最后一级目录名。提示词、对话正文、模型回复、工具输入和工具
-输出都不会解析，更不会保存。
+`cwd` 写入前只保留最后一级目录名。程序不会为提示词、对话正文、模型回复、工具
+输入或工具输出建立字段，也不会保存这些内容。
 
 Hook 不会调用 `sudo`，也不会查询电源。它只把一条小事件原子写入本地队列，然后
 返回，让 Codex 继续工作。
@@ -85,7 +86,7 @@ JSON 解码前就会被跳过；真正建立的数据结构只有：
 - `turn_id`。
 
 另有一条兼容查询，只读取 `codex_core::session::turn` 对应的 turn 状态元数据。
-两条路径都不会查询或建立任务标题、预览、首条消息、提示词、回复或工具内容，
+两条路径都不会查询或建模任务标题、预览、首条消息、提示词、回复或工具内容，
 rollout 正文也不会被复制到 Keeper 的状态或日志中。完整 `cwd` 在进入状态前只
 保留最后一级目录名。如果这些本地格式以后变了，运行时检测会自动停用，任务跟踪
 回退到 Hook。
@@ -104,20 +105,28 @@ rollout 正文也不会被复制到 Keeper 的状态或日志中。完整 `cwd` 
 如果队列已满或暂时写不了，Hook 会选择不阻塞 Codex。此时已经存在的电源接管仍受
 root watchdog 保护。
 
+Hook 配置的合并、校验和移除已经改成原生 Swift。它会保留别的工具已有的
+handler，只删除命令完全匹配的 Codex Lid Keeper 项；写入前生成带时间戳的备份，
+临时文件权限是 `0600`，同步完成后再原子替换。Release 安装不依赖下载来的
+Python 运行时，也不会让 Hook 内容决定要执行的命令路径。
+
 ## 安装前建议检查
 
 至少看一遍：
 
-- `scripts/install.sh`
-- `scripts/uninstall.sh`
-- `scripts/hooks_config.py`
+- `scripts/install_components.sh`
+- `scripts/uninstall_components.sh`
+- `Sources/CodexLidKeeperCore/HooksConfiguration.swift`
+- `Sources/CodexLidKeeperCLI/main.swift`
 - `Resources/com.zundu.codex-lid-keeper.agent.plist`
 - `Resources/com.zundu.codex-lid-keeper.recovery.plist`
 - `Sources/CodexLidKeeperCore/CodexRuntimeTaskDetector.swift`
 - `Sources/CodexLidKeeperCore/PrivilegedPowerManager.swift`
 
-安装脚本会先用 `visudo` 检查 sudoers 文件，验证通过才会放进系统目录。安装后，
-Codex 还会要求你手动检查并信任新增 Hook。
+请求管理员权限前，包内安装器会先检查 App 标识、plist、当前芯片架构和签名结构
+是否自洽。由于使用的是 ad-hoc 签名，这项检查不能证明发布者身份。sudoers 也会
+先通过 `visudo`，验证成功才会放进系统目录。安装后，Codex 还会要求你手动检查并
+信任新增 Hook。
 
 ## 怎么报告安全问题
 
@@ -134,5 +143,7 @@ Codex 还会要求你手动检查并信任新增 Hook。
 
 ## 当前支持范围
 
-这是公开 Alpha。当前维护默认分支和最新 App Alpha；App 只有 ad-hoc 签名，
-还没有 Developer ID 签名与 notarization，不建议拿它做无人值守部署。
+这是公开 Alpha。当前维护默认分支和最新 App Alpha；App 只有 ad-hoc 签名，不能
+据此确认发布者身份，也还没有 Developer ID 签名与 notarization。DMG 会发布
+SHA-256，但没有 Apple 分发身份就无法获得正常 Gatekeeper 信任。不建议拿它做
+无人值守部署。

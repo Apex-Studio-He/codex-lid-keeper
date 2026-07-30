@@ -21,6 +21,7 @@ cd codex-lid-keeper
 ./scripts/build.sh
 /usr/bin/python3 scripts/test_hooks_config.py
 /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
+./scripts/build_distribution.sh
 ```
 
 Development requirements:
@@ -50,8 +51,8 @@ must be manual, clearly labeled, and excluded from CI.
 - `CodexLidKeeperCore`: state, queue, power, and reconciliation logic
 - `CodexLidKeeperCLI`: command routing and system integration
 - `CodexLidKeeperSelfTests`: zero-dependency native regression suite
-- `scripts`: build, Hook merge, install, recovery, uninstall, integration tests
-- `Resources`: launchd definitions
+- `scripts`: build, distribution, install, recovery, uninstall, integration tests
+- `Resources`: app metadata, launchd definitions, and distribution entry points
 
 Prefer small caller-facing interfaces with safety complexity kept inside the
 core module. Preserve fail-open Hook behavior and fail-safe power recovery.
@@ -74,6 +75,7 @@ cd codex-lid-keeper
 ./scripts/build.sh
 /usr/bin/python3 scripts/test_hooks_config.py
 /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
+./scripts/build_distribution.sh
 ```
 
 需要 macOS 13 或更高版本、Swift 6 和 Python 3。
