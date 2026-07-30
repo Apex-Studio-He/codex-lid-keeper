@@ -122,12 +122,25 @@ public final class DaemonCoordinator {
                 ($0.id, $0)
             }
         )
-        let existing = try stateStore.read().runtimeLeases
-        guard existing != detected else { return false }
+        let existing = try stateStore.read()
+        let hasCompletedHookLease = detection.completedTaskIDs.contains {
+            existing.leases[$0] != nil
+        }
+        guard existing.runtimeLeases != detected
+            || hasCompletedHookLease else {
+            return false
+        }
         return try stateStore.update { state in
-            guard state.runtimeLeases != detected else { return false }
-            state.runtimeLeases = detected
-            return true
+            var changed = false
+            if state.runtimeLeases != detected {
+                state.runtimeLeases = detected
+                changed = true
+            }
+            for taskID in detection.completedTaskIDs
+            where state.leases.removeValue(forKey: taskID) != nil {
+                changed = true
+            }
+            return changed
         }
     }
 

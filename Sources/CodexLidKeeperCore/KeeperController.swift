@@ -97,6 +97,9 @@ public final class KeeperController {
                     ($0.id, $0)
                 }
             )
+            for taskID in detection.completedTaskIDs {
+                statusState.leases.removeValue(forKey: taskID)
+            }
         }
         return KeeperStatusSnapshot(
             automationEnabled: state.automationEnabled,

@@ -4,6 +4,43 @@ All notable project changes are recorded here.
 
 本文件记录项目的重要变化。
 
+## [0.2.2-app-alpha] - 2026-07-30
+
+### English
+
+#### Fixed
+
+- A rollout `task_complete` marker now removes a matching Hook lease when the
+  `Stop` Hook was missed, timed out, or had not yet been trusted. The guard no
+  longer stays active for the remainder of the hard lease in that case.
+- Completion cleanup is scoped to the exact `session_id + turn_id`. A
+  completion from an older turn cannot remove newer work in the same Codex
+  session.
+- Live app status applies the same completion evidence immediately, without
+  waiting for the next daemon state write.
+
+#### Verification
+
+- Native regression coverage increased to 48 self-tests.
+- Added exact regressions for a missed `Stop` Hook, old-turn/new-turn
+  isolation, and immediate UI status correction.
+
+### 中文
+
+#### 修复
+
+- 即使 `Stop` Hook 因超时、尚未信任或其他原因漏送，只要 rollout 已写下
+  `task_complete`，对应的 Hook 租约就会自动清掉，不会再多守护几个小时。
+- 清理范围严格限定为同一个 `session_id + turn_id`。旧 turn 的结束信号不会
+  误删同一 Codex 会话里后来开始的新任务。
+- App 读取实时状态时也会立刻应用这条结束信号，不必等后台进程下一次写回状态。
+
+#### 验证
+
+- Swift 自测增加到 48 项。
+- 新增“漏掉 Stop 后恢复”“旧 turn 不伤新 turn”和“界面立即纠正状态”三项
+  精确回归。
+
 ## [0.2.1-app-alpha] - 2026-07-30
 
 ### English
@@ -186,3 +223,4 @@ All notable project changes are recorded here.
 [0.1.0-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.1.0-alpha
 [0.2.0-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.0-app-alpha
 [0.2.1-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.1-app-alpha
+[0.2.2-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.2-app-alpha
