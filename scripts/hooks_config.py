@@ -19,6 +19,19 @@ EVENTS = (
     "Stop",
     "SessionEnd",
 )
+SUPPORTED_EVENTS = (
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "PreCompact",
+    "PostCompact",
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+)
 KEEPER_TIMEOUT_SECONDS = 1
 
 
@@ -35,10 +48,21 @@ def load_document(path: Path) -> dict[str, Any]:
         raise HooksConfigError(f"{path} is not valid UTF-8 JSON: {exc}") from exc
     if not isinstance(document, dict):
         raise HooksConfigError(f"{path} must contain a JSON object")
-    hooks = document.get("hooks")
-    if hooks is not None and not isinstance(hooks, dict):
-        raise HooksConfigError(f"{path}: top-level 'hooks' must be an object")
+    validate_document(document)
     return document
+
+
+def validate_document(document: dict[str, Any]) -> None:
+    unsupported = set(document) - {"description", "hooks"}
+    if unsupported:
+        field = sorted(unsupported)[0]
+        raise HooksConfigError(f"unsupported top-level field: {field}")
+    description = document.get("description")
+    if description is not None and not isinstance(description, str):
+        raise HooksConfigError("top-level 'description' must be a string")
+    if "hooks" in document and not isinstance(document["hooks"], dict):
+        raise HooksConfigError("top-level 'hooks' must be an object")
+    validate_known_events(document)
 
 
 def is_keeper_handler(value: Any, command: str) -> bool:
@@ -50,13 +74,86 @@ def is_keeper_handler(value: Any, command: str) -> bool:
 
 
 def is_expected_keeper_handler(value: Any, command: str) -> bool:
+    timeout = value.get("timeout") if isinstance(value, dict) else None
     return (
         is_keeper_handler(value, command)
-        and value.get("timeout") == KEEPER_TIMEOUT_SECONDS
+        and not isinstance(timeout, bool)
+        and isinstance(timeout, int)
+        and timeout == KEEPER_TIMEOUT_SECONDS
     )
 
 
+def validate_known_events(document: dict[str, Any]) -> None:
+    hooks = document.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    for event in SUPPORTED_EVENTS:
+        if event not in hooks:
+            continue
+        groups = hooks[event]
+        if not isinstance(groups, list):
+            raise HooksConfigError(f"hooks.{event} must be an array")
+        for group_index, group in enumerate(groups):
+            if not isinstance(group, dict):
+                raise HooksConfigError(
+                    f"hooks.{event}[{group_index}] must be an object"
+                )
+            matcher = group.get("matcher")
+            if matcher is not None and not isinstance(matcher, str):
+                raise HooksConfigError(
+                    f"hooks.{event}[{group_index}].matcher must be a string"
+                )
+            handlers = group.get("hooks", [])
+            if not isinstance(handlers, list):
+                raise HooksConfigError(
+                    f"hooks.{event}[{group_index}].hooks must be an array"
+                )
+            for handler_index, handler in enumerate(handlers):
+                if not isinstance(handler, dict):
+                    raise HooksConfigError(
+                        f"hooks.{event}[{group_index}].hooks"
+                        f"[{handler_index}] must be an object"
+                    )
+                validate_handler(
+                    handler,
+                    f"hooks.{event}[{group_index}].hooks[{handler_index}]",
+                )
+
+
+def validate_handler(handler: dict[str, Any], path: str) -> None:
+    handler_type = handler.get("type")
+    if handler_type not in {"command", "prompt", "agent"}:
+        raise HooksConfigError(
+            f"{path}.type must be 'command', 'prompt', or 'agent'"
+        )
+    if handler_type != "command":
+        return
+    if not isinstance(handler.get("command"), str):
+        raise HooksConfigError(f"{path}.command must be a string")
+    if "commandWindows" in handler and "command_windows" in handler:
+        raise HooksConfigError(
+            f"{path} cannot contain both commandWindows and command_windows"
+        )
+    for field in ("commandWindows", "command_windows", "statusMessage"):
+        value = handler.get(field)
+        if value is not None and not isinstance(value, str):
+            raise HooksConfigError(f"{path}.{field} must be a string")
+    for field in ("timeout", "additionalContextLimit"):
+        value = handler.get(field)
+        if value is not None and (
+            type(value) is not int
+            or value < 0
+            or value > (1 << 64) - 1
+        ):
+            raise HooksConfigError(
+                f"{path}.{field} must be an unsigned integer"
+            )
+    if "async" in handler and not isinstance(handler["async"], bool):
+        raise HooksConfigError(f"{path}.async must be a boolean")
+
+
 def remove_keeper_hooks(document: dict[str, Any], command: str) -> bool:
+    validate_document(document)
     hooks = document.get("hooks")
     if not isinstance(hooks, dict):
         return False
@@ -80,9 +177,12 @@ def remove_keeper_hooks(document: dict[str, Any], command: str) -> bool:
                 for handler in handlers
                 if not is_keeper_handler(handler, command)
             ]
-            if len(filtered) != len(handlers):
+            removed = len(filtered) != len(handlers)
+            if removed:
                 changed = True
-            if filtered:
+            if not removed:
+                kept_groups.append(group)
+            elif filtered:
                 updated = dict(group)
                 updated["hooks"] = filtered
                 kept_groups.append(updated)
@@ -95,6 +195,7 @@ def remove_keeper_hooks(document: dict[str, Any], command: str) -> bool:
 
 
 def install_keeper_hooks(document: dict[str, Any], command: str) -> bool:
+    validate_document(document)
     before = json.dumps(document, sort_keys=True, separators=(",", ":"))
     remove_keeper_hooks(document, command)
     hooks = document.setdefault("hooks", {})
@@ -121,12 +222,13 @@ def install_keeper_hooks(document: dict[str, Any], command: str) -> bool:
 
 
 def verify_keeper_hooks(document: dict[str, Any], command: str) -> list[str]:
+    validate_document(document)
     hooks = document.get("hooks")
     if not isinstance(hooks, dict):
         return list(EVENTS)
     missing: list[str] = []
     for event in EVENTS:
-        count = 0
+        keeper_handlers: list[Any] = []
         groups = hooks.get(event, [])
         if isinstance(groups, list):
             for group in groups:
@@ -134,11 +236,14 @@ def verify_keeper_hooks(document: dict[str, Any], command: str) -> list[str]:
                     continue
                 handlers = group.get("hooks", [])
                 if isinstance(handlers, list):
-                    count += sum(
-                        1 for handler in handlers
-                        if is_expected_keeper_handler(handler, command)
+                    keeper_handlers.extend(
+                        handler for handler in handlers
+                        if is_keeper_handler(handler, command)
                     )
-        if count != 1:
+        if (
+            len(keeper_handlers) != 1
+            or not is_expected_keeper_handler(keeper_handlers[0], command)
+        ):
             missing.append(event)
     return missing
 
@@ -150,6 +255,7 @@ def write_document(path: Path, document: dict[str, Any], make_backup: bool) -> P
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         backup = path.with_name(f"{path.name}.backup.{stamp}")
         shutil.copy2(path, backup)
+        backup.chmod(0o600)
 
     payload = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(

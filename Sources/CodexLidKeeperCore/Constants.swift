@@ -14,6 +14,12 @@ public enum KeeperConstants {
     public static let integrationMarker = "com.zundu.codex-lid-keeper"
     public static let installedExecutable =
         "/Library/PrivilegedHelperTools/com.zundu.codex-lid-keeper"
+    public static let recoveryDaemonLabel =
+        "com.zundu.codex-lid-keeper.recovery"
+    public static let recoveryDaemonPlist =
+        "/Library/LaunchDaemons/com.zundu.codex-lid-keeper.recovery.plist"
+    public static let userAgentLabel =
+        "com.zundu.codex-lid-keeper.agent"
     public static let rootOwnershipFile = "/var/db/com.zundu.codex-lid-keeper.power.json"
     public static let rootWatchdogMaximumAge: TimeInterval = 120
     public static let runtimeLogRowLimit = 50_000

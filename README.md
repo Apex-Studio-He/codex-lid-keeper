@@ -2,240 +2,278 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> **v0.2.2 App Alpha — MacBook testers wanted**
+[![CI](https://github.com/Apex-Studio-He/codex-lid-keeper/actions/workflows/ci.yml/badge.svg)](https://github.com/Apex-Studio-He/codex-lid-keeper/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Apex-Studio-He/codex-lid-keeper?include_prereleases)](https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.3.0-app-alpha)
+[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-111820)](https://github.com/Apex-Studio-He/codex-lid-keeper)
+[![MIT](https://img.shields.io/badge/license-MIT-2388ff)](LICENSE)
+
+![Codex Lid Keeper — a guard that follows the task](docs/images/social-preview.jpg)
+
+> **v0.3.0 Public Alpha — MacBook testers wanted**
 >
-> If you can run a controlled closed-lid test on an open, well-ventilated
-> desk, start with the [testing guide](TESTING.md), then share your Mac model,
-> macOS version, and results through the
-> [tester issue forms](https://github.com/Apex-Studio-He/codex-lid-keeper/issues/new/choose).
+> Codex Lid Keeper is ready for careful testing, not unattended deployment.
+> Start on an open, hard, well-ventilated desk and read the
+> [testing guide](TESTING.md) before closing the lid.
 
-Keep local Codex work running after a MacBook lid closes, then restore the
-previous sleep policy and display brightness when the final task ends.
+Codex Lid Keeper is a native macOS app that follows actual local Codex work.
+When eligible tasks are active, it can keep the MacBook running after lid
+close. After the final task—or when a safety boundary fails—it restores the
+previous sleep policy and saved display brightness.
 
-![Codex Lid Keeper dashboard](docs/images/dashboard-zh.png)
+This is deliberately narrower than a general keep-awake toggle: the guard
+starts and stops with Codex task lifecycle.
 
-![Battery guard settings](docs/images/settings-power-zh.png)
+## Download
 
-## What the app shows
+The v0.3.0 DMG contains a Universal app for Apple Silicon and Intel, the
+complete system-component installer, an uninstaller, and bilingual safety
+notes.
 
-- **Actual Codex activity.** Read-only rollout lifecycle markers detect new
-  work immediately, turn-state logs cover compatibility fallback, and trusted
-  Hooks provide a second durable lifecycle path.
-- **Accurate concurrent counts.** Runtime observations and Hook leases are
-  merged by Codex session, so two running tasks show `2` without double-counting
-  the same task.
-- **Self-healing completion.** If a `Stop` Hook is missed, the matching
-  rollout `task_complete` marker clears only that exact turn. A newer turn in
-  the same session is left untouched.
-- **Live system power data.** AC state and battery charge come directly from
-  macOS. If neither activity source is available, the task count shows `—`
-  rather than sample data.
-- **Two guard policies.** Run only on AC power (the default), or explicitly
-  allow battery operation with a configurable charge floor.
-- **Reversible display dimming.** The app saves the built-in display
-  brightness, waits three seconds, dims it to minimum, and restores it after
-  completion, cancellation, or app exit.
-- **A native menu-bar app.** Check state, change power policy, prepare to close,
-  or trigger emergency restore without keeping the main window open.
-- **A four-step readiness rail.** Codex, power policy, battery safety, and
-  recovery health must all be ready before closed-lid mode can be armed.
+- [Download the Universal DMG](https://github.com/Apex-Studio-He/codex-lid-keeper/releases/download/v0.3.0-app-alpha/Codex-Lid-Keeper-v0.3.0-universal.dmg)
+- [Download SHA256SUMS](https://github.com/Apex-Studio-He/codex-lid-keeper/releases/download/v0.3.0-app-alpha/SHA256SUMS)
+- [Open the v0.3.0 release notes](https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.3.0-app-alpha)
+
+Verify both files from the same directory:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+```
+
+Then:
+
+1. open the DMG;
+2. Control-click **Install Codex Lid Keeper.command** and choose **Open**;
+3. let Terminal request administrator access through standard macOS `sudo`;
+4. open `/hooks` in Codex, review the five lifecycle Hooks, and trust them.
+
+Do not drag only the app into `/Applications`. The graphical app also needs
+the fixed-function Helper, recovery watchdog, user agent, exact sudoers rule,
+and Codex Hooks. The included installer places all of them together.
+
+### Gatekeeper disclosure
+
+The app is ad-hoc signed so macOS can check the bundle's internal signature
+structure, but that signature does not authenticate the publisher. v0.3.0 is
+**not** Developer ID signed or Apple-notarized. macOS will therefore warn
+before the first launch. Use Control-click → Open for this Alpha only after
+reviewing the source, GitHub Release checksum, and
+[security model](SECURITY.md). Never disable Gatekeeper system-wide.
+
+The password prompt belongs to Terminal and `sudo`; there is intentionally no
+username or password field inside the app. Codex Lid Keeper cannot read or
+store that password.
+
+## Why task awareness matters
+
+![Codex-aware lifecycle](docs/images/gallery-01-hero.jpg)
+
+- **Actual activity, not an open window.** Recent read-only rollout lifecycle
+  markers detect new and already-running work. Trusted Hooks provide an
+  independent durable path.
+- **Concurrent counts are deduplicated.** Runtime observations and Hook leases
+  are merged by Codex session, so the same task is not counted twice.
+- **A missed completion Hook can heal.** A matching rollout
+  `task_complete` clears only that exact `session_id + turn_id`; newer work in
+  the same session remains protected.
+- **The final task owns the finish line.** One task ending does not restore
+  sleep while another eligible task remains active.
+- **Unavailable data is not invented.** If both local activity sources are
+  unavailable, the UI displays `—`.
+
+## Power and recovery boundaries
+
+![Power and recovery settings](docs/images/gallery-02-safety.jpg)
+
+- **AC only** is the default.
+- **AC or battery** is explicit opt-in, with a configurable 30–100% charge
+  floor.
+- The independent root watchdog enforces a non-configurable 30% minimum.
+- “Ready to close” requires the recovery job to be loaded, the user Agent to
+  be running with a live PID and held daemon lock, and the root power heartbeat
+  to be fresh. The app checks again immediately before display dimming.
+- AC and battery profiles are captured separately and restored to their exact
+  previous values.
+- The built-in display can be saved, dimmed after a three-second countdown,
+  and restored after completion, cancellation, or app exit.
+- Main window, menu bar, and Settings all expose emergency restore.
+
+Restoration runs when:
+
+- the final task ends;
+- the user pauses, clears tasks, or chooses emergency restore;
+- current power no longer matches the selected policy;
+- charge falls below the configured floor;
+- a lease expires;
+- the user daemon stops heartbeating for two minutes; or
+- the uninstaller runs.
 
 ## Safety warning
 
 This project relies on the undocumented macOS `pmset disablesleep` setting.
-Apple may change or remove this behavior in any macOS update.
+Apple may change or remove this behavior in a future update.
 
 **Never put a running, closed MacBook in a bag, sleeve, drawer, bed, sofa, or
-other poorly ventilated space.** Keep the first hardware test supervised on an
-open desk and stop if the Mac becomes unusually warm.
+other poorly ventilated space.** Keep the first test supervised on an open
+desk. Stop if the machine becomes unusually warm or power behavior is unclear.
 
-## Install
+Physical closed-lid networking, temperature, and model compatibility remain
+hardware-test questions; the automated suite does not prove them.
 
-Requirements: a MacBook running macOS 13 or later, Apple Command Line Tools, a
-current Codex desktop build, and administrator access.
+## Privacy boundary
+
+The app does not model or persist prompt text, model responses, tool inputs,
+or tool outputs.
+
+Its read-only runtime detector selects only recent thread identity, rollout
+path, working directory, and update/archive metadata. It examines at most the
+final 4 MiB of each recent rollout and decodes only lifecycle envelope type,
+`task_started` / `task_complete`, and `turn_id`. Full paths are reduced to the
+final project-directory component before entering Keeper state.
+
+Hooks decode only:
+
+- `session_id`
+- `turn_id`
+- `cwd` (reduced to the final component)
+- `hook_event_name`
+
+See [SECURITY.md](SECURITY.md) for the complete privilege and data model.
+
+## What gets installed
+
+The bundled installer validates its app identifier, plist files, architecture,
+and code-signature integrity before asking for administrator access. It then
+installs:
+
+- `/Applications/Codex Lid Keeper.app`;
+- a root-owned fixed-function helper under
+  `/Library/PrivilegedHelperTools`;
+- a root recovery LaunchDaemon;
+- a per-user reconciliation LaunchAgent;
+- an exact-command sudoers rule; and
+- five merged Codex lifecycle Hooks.
+
+Hook installation is implemented natively in Swift. Release users do not need
+Python, Swift, Xcode, or Command Line Tools.
+
+## Build from source
+
+Source development requires macOS 13+, Swift 6 Command Line Tools, a current
+Codex build, and administrator access for live installation.
 
 ```bash
 git clone https://github.com/Apex-Studio-He/codex-lid-keeper.git
 cd codex-lid-keeper
-./scripts/install.sh
-```
-
-The installer builds and tests the source, then:
-
-1. installs `Codex Lid Keeper.app` in `/Applications`;
-2. installs a fixed-function, root-owned power helper;
-3. installs a per-user daemon and independent root watchdog;
-4. backs up and merges five Codex Hooks without replacing unrelated Hooks;
-5. adds an exact-command sudoers boundary; and
-6. launches the app.
-
-The administrator-password prompt appears in Terminal through the standard
-macOS `sudo` flow, not inside the app. Codex Lid Keeper never reads or stores
-the password.
-
-If Codex reports changed Hook definitions, open `/hooks`, review the five
-Codex Lid Keeper handlers, and trust them. The read-only runtime detector can
-bootstrap tasks that were already running, while trusted Hooks remain the
-stable lifecycle path for later Codex versions.
-
-> This Alpha is built locally from source and ad-hoc signed. It does not yet
-> have Developer ID signing or Apple notarization. Review the installer and
-> [security model](SECURITY.md) before use.
-
-## How activity tracking works
-
-Tracking has two local inputs. First, a read-only detector follows only
-`task_started`, `task_complete`, and `turn_id` lifecycle fields in recent
-Codex rollouts, plus the working directory needed for the project label. A
-minimal turn-state log query remains as a compatibility fallback. The detector
-does not model or persist thread titles, prompts, responses, or tool payloads.
-This makes new and already-running tasks visible without waiting for a later
-progress log.
-
-The app also consumes these Codex lifecycle events:
-
-- `UserPromptSubmit`
-- `PreToolUse`
-- `PostToolUse`
-- `Stop`
-- `SessionEnd`
-
-Each `session_id + turn_id` becomes a renewable task lease. Runtime and Hook
-observations are deduplicated by session. Multiple local tasks remain
-independent, and the final task must end before sleep is restored. A Hook only
-queues a privacy-minimal event and immediately returns; it never waits for
-`sudo` or power reconciliation.
-
-Prompt text, model responses, tool inputs, and tool outputs are not persisted.
-
-## Power policies
-
-### AC only
-
-The default. Closed-lid guarding activates only while external power is
-present and charge is above the configured floor. Disconnecting AC restores
-the project-owned sleep setting.
-
-### AC or battery
-
-An explicit advanced option. Work can continue after AC is disconnected, but
-the helper restores sleep when charge falls below the selected threshold. The
-UI accepts `30%...100%`, while the root watchdog keeps a non-configurable 30%
-hard floor.
-
-The helper captures AC and battery profiles separately and restores the exact
-prior values. It never assumes the user's previous value was `0`.
-
-## Recovery boundaries
-
-Restoration occurs when:
-
-- the final Codex task ends;
-- the user pauses, clears tasks, or chooses emergency restore;
-- live power no longer matches the selected policy;
-- charge falls below the configured floor;
-- a task lease expires;
-- the user daemon stops heartbeating for two minutes; or
-- the uninstaller runs.
-
-The root-owned record lives at:
-
-```text
-/var/db/com.zundu.codex-lid-keeper.power.json
-```
-
-The helper restores only state backed by a valid ownership record. It refuses
-to guess if that record is malformed.
-
-## Build and test safely
-
-These checks use fakes or an isolated dry-run home. They never enable the live
-sleep override:
-
-```bash
 ./scripts/build.sh
 /usr/bin/python3 scripts/test_hooks_config.py
 /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
-./scripts/build_app.sh
+./scripts/build_distribution.sh
 ```
 
-Current baseline:
+Install the locally built app and components:
+
+```bash
+./scripts/install.sh
+```
+
+Current automated baseline:
 
 ```text
-48/48 self-tests passed
-Ran 5 tests ... OK
+58/58 native self-tests passed
+Ran 8 Hook compatibility tests ... OK
 non-blocking dry-run Hook lifecycle passed
+Universal DMG verification passed
 ```
 
-Coverage includes immediate three-task rollout detection, stale-log
-suppression after task completion, recovery from a missed `Stop` Hook without
-deleting a newer turn, Hook/runtime deduplication, strict event-spool capacity,
-crash replay, AC and battery policies, exact prior-state restoration,
-low-charge safety, watchdog expiry, and migration from older state. Physical
-closed-lid networking, thermal behavior, and model compatibility remain manual
-hardware tests.
+Tests use fakes or an isolated home and never enable the live sleep override.
+Coverage includes immediate three-task detection, exact missed-`Stop`
+recovery, new-turn isolation, Hook/runtime deduplication, event capacity and
+replay, AC/battery policy, prior-state restoration, low charge, watchdog
+expiry, native Hook configuration, and state migration.
+
+## UI overview
+
+[Watch the 29-second UI screenshot overview](docs/demo/codex-lid-keeper-ui-walkthrough.mp4).
+
+It is made from real interface screenshots and summarizes the safety controls;
+it is **not** a physical closed-lid test video. A valid hardware demonstration
+must show a continuous supervised lid close, observable task progress, and
+final restoration.
 
 ## Emergency restore
 
-Emergency restore is available in the main window, menu bar, and Settings. It
-can also be run from the repository:
-
-```bash
-./scripts/emergency-restore.sh
-```
-
-or through the installed helper:
+From an installed app:
 
 ```bash
 "/Applications/Codex Lid Keeper.app/Contents/Resources/codex-lid-keeper" emergency-restore
 ```
 
-It pauses automation, clears task leases, and restores project-owned sleep and
+From a source checkout:
+
+```bash
+./scripts/emergency-restore.sh
+```
+
+This pauses automation, clears leases, and restores project-owned sleep and
 brightness state.
 
 ## Uninstall
+
+Open the DMG and run **Uninstall Codex Lid Keeper.command**, or use:
 
 ```bash
 ./scripts/uninstall.sh
 ```
 
-The uninstaller restores owned power state before removing the app, helper,
-sudoers rule, launchd jobs, and project Hook handlers. User logs and
+The uninstaller restores owned power state before removing the app, Helper,
+sudoers rule, launchd jobs, login item, and project Hooks. User logs and
 configuration are retained, and their location is printed.
 
-## Project status
+## We need your test report
 
-This is an experimental public Alpha, not an Apple or OpenAI product. It does
-not yet provide:
-
-- Developer ID signing and notarization;
-- a DMG or automatic updater;
-- a complete MacBook compatibility matrix; or
-- guarantees for future macOS releases.
-
-We especially need test results from:
+Useful coverage includes:
 
 - Apple Silicon and Intel MacBooks;
-- macOS 13, 14, 15, and newer releases;
-- AC-only and battery-capable policies;
-- multiple concurrent Codex tasks; and
-- closed-lid networking, progress, temperature, and final restoration.
+- macOS 13, 14, 15, and newer;
+- one, two, and three concurrent Codex tasks;
+- AC-only and battery-enabled policies;
+- unplug and low-charge restoration;
+- supervised closed-lid networking and progress;
+- temperature observations on an open desk; and
+- emergency and final-task restoration.
+
+Start with the [bilingual testing guide](TESTING.md), then use the
+[hardware test form](https://github.com/Apex-Studio-He/codex-lid-keeper/issues/new?template=test_report.yml).
+Do not upload prompts, transcripts, full Hook files, session IDs, or
+unsanitized paths.
+
+## Current limitations
+
+- no Developer ID signing or Apple notarization;
+- no automatic updater;
+- no temperature-based cutoff;
+- the graphical interface is currently Simplified Chinese only;
+- incomplete MacBook/macOS compatibility evidence;
+- undocumented macOS behavior may change; and
+- not intended for unattended or enclosed-space operation.
 
 ## Resources
 
-- [Bilingual testing guide / 双语测试指南](TESTING.md)
-- [Architecture / 架构说明](docs/ARCHITECTURE.md)
-- [Contributing / 参与贡献](CONTRIBUTING.md)
-- [Changelog / 变更记录](CHANGELOG.md)
+- [Testing guide / 测试指南](TESTING.md)
+- [Architecture](docs/ARCHITECTURE.md)
 - [Security policy](SECURITY.md) |
   [安全说明](SECURITY.zh-CN.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Launch facts and channel checklist](docs/LAUNCH-KIT.md)
 
 ## Acknowledgements and license
 
-The design research was informed by
+Design research was informed by
 [CodexAwake](https://github.com/Lu233/CodexAwake),
 [wake](https://github.com/Moarram/wake), and
 [claude-awake](https://github.com/Ami3466/claude-awake).
 No source from those projects is vendored here.
 
-Licensed under the [MIT License](LICENSE).
+Codex Lid Keeper is not an Apple or OpenAI product. Licensed under the
+[MIT License](LICENSE).

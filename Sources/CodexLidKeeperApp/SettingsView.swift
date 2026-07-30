@@ -133,26 +133,44 @@ struct SettingsView: View {
                     ready: model.helperInstalled
                 )
                 IntegrationRow(
+                    title: "恢复 watchdog",
+                    detail: "任务或心跳异常时自动恢复睡眠设置",
+                    ready: model.recoveryProtectionReady
+                )
+                IntegrationRow(
+                    title: "用户后台 Agent",
+                    detail: "接收任务事件并维护恢复心跳",
+                    ready: model.userAgentLoaded
+                )
+                IntegrationRow(
                     title: "Codex Hooks",
                     detail: "只记录任务生命周期，不保存对话内容",
                     ready: model.hooksInstalled
                 )
+                if let error = model.hooksConfigurationError {
+                    Label(
+                        "无法读取 Hooks 配置：\(error)",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                }
                 IntegrationRow(
                     title: "亮度控制",
                     detail: "只作用于支持的内置显示器",
                     ready: model.brightnessAvailable
                 )
-                if !model.hooksInstalled {
+                if !model.systemComponentsReady || !model.hooksInstalled {
                     Button {
                         model.installHooksAndOpenCodex()
                     } label: {
                         Label(
-                            model.helperInstalled
+                            model.systemComponentsReady
                                 ? "安装 Hooks 并打开 Codex"
-                                : "查看完整安装方法",
-                            systemImage: model.helperInstalled
+                                : "安装或修复系统组件",
+                            systemImage: model.systemComponentsReady
                                 ? "link.badge.plus"
-                                : "arrow.up.forward.app"
+                                : "terminal"
                         )
                     }
                 }

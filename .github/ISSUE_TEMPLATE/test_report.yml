@@ -46,6 +46,25 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: keeper
+    attributes:
+      label: "Keeper version / Keeper 版本"
+      placeholder: "v0.3.0-app-alpha"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: "Install method / 安装方式"
+      options:
+        - "GitHub Release DMG / GitHub Release 安装包"
+        - "Source installer / 源码安装"
+        - "Upgrade from an earlier version / 从旧版升级"
+    validations:
+      required: true
+
   - type: dropdown
     id: power_mode
     attributes:
@@ -70,12 +89,14 @@ body:
     attributes:
       label: "What did you test? / 测了哪些项目？"
       options:
+        - label: "DMG verification and component install / DMG 校验与系统组件安装"
         - label: "Single task lifecycle / 单任务生命周期"
         - label: "Multiple concurrent tasks / 多任务并发"
         - label: "Power-policy switching / 供电策略切换"
         - label: "Brightness dim and restore / 亮度调暗与恢复"
         - label: "Controlled closed-lid run / 受控合盖运行"
         - label: "Emergency restore / 紧急恢复"
+        - label: "Uninstall and post-uninstall state / 卸载与卸载后状态"
 
   - type: textarea
     id: result

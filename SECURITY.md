@@ -79,18 +79,29 @@ is not blocked, while existing power ownership remains subject to the root
 watchdog. State and log files are user-only, and the log rotates at 1 MiB with
 one retained generation.
 
+Hook configuration is merged natively in Swift. The merger preserves unrelated
+handlers, removes only the exact Codex Lid Keeper command, creates a timestamped
+backup, writes a mode-`0600` temporary file, synchronizes it, and atomically
+renames it into place. Release installation does not execute a downloaded
+Python runtime or accept Hook-provided command paths.
+
 ## Installation review
 
 The installer changes sensitive system locations. Review:
 
-- `scripts/install.sh`
-- `scripts/uninstall.sh`
+- `scripts/install_components.sh`
+- `scripts/uninstall_components.sh`
+- `Sources/CodexLidKeeperCore/HooksConfiguration.swift`
+- `Sources/CodexLidKeeperCLI/main.swift`
 - `Resources/com.zundu.codex-lid-keeper.recovery.plist`
 - `Sources/CodexLidKeeperCore/CodexRuntimeTaskDetector.swift`
 - the generated `/etc/sudoers.d/codex-lid-keeper`
 
-The installer validates the sudoers fragment with `visudo` before installing
-it. Codex separately requires Hook trust review.
+Before elevation, the bundled installer validates the app identifier, plist
+files, architecture support, and strict code-signature consistency. Because
+the signature is ad-hoc, this check does not authenticate the publisher. It
+validates the generated sudoers fragment with `visudo` before installing it.
+Codex separately requires Hook trust review.
 
 ## Reporting a vulnerability
 
@@ -107,5 +118,8 @@ with:
 ## Supported versions
 
 The current default branch and latest App Alpha are maintained. The app is
-ad-hoc signed rather than Developer ID signed and notarized. This project
-remains experimental and should not be deployed unattended.
+ad-hoc signed rather than Developer ID signed and notarized; an ad-hoc
+signature does not authenticate the publisher. The DMG publishes a SHA-256
+checksum but cannot receive normal Gatekeeper trust without an Apple
+distribution identity. This project remains experimental and should not be
+deployed unattended.

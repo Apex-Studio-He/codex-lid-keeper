@@ -4,6 +4,92 @@ All notable project changes are recorded here.
 
 本文件记录项目的重要变化。
 
+## [0.3.0-app-alpha] - 2026-07-30
+
+### English
+
+#### Added
+
+- A directly downloadable Universal DMG for Apple Silicon and Intel Macs.
+- A self-contained Terminal installer and uninstaller inside the distribution.
+- In-app repair for a missing root Helper: the Permissions view now opens the
+  bundled installer instead of sending binary users back to a source checkout.
+- Native Swift Hook install, exact verification, scoped removal, timestamped
+  backup, mode-`0600` writes, and atomic replacement.
+- Scripts for Universal build, DMG assembly, checksum, mount-and-verify, launch
+  assets, and a UI screenshot overview.
+- GitHub Social Preview, 1270×760 gallery assets, 240×240 thumbnail, and a
+  clearly labeled 29-second overview made from real UI screenshots.
+
+#### Changed
+
+- Release users no longer need Python, Swift, Xcode, or Command Line Tools.
+- Source and binary installs now share the same validated component installer.
+- Installation preflights a copy of the existing Hooks file before requesting
+  admin access; upgrades restore old owned power state before replacing
+  recovery components.
+- App and bundled CLI are signed inside-out with ad-hoc Hardened Runtime before
+  strict bundle verification.
+- The uninstaller now unregisters the app login item and removes native Hooks.
+- The App no longer silently re-enables a login item that the user turned off.
+- Hook updates now use a private process lock, detect conflicting writes,
+  preserve unrelated empty groups, and reject duplicate or malformed handlers.
+- Ready-to-close now requires both the system recovery LaunchDaemon and user
+  reconciliation Agent to be present and loaded, with a fresh check immediately
+  before display dimming.
+- Failed launchd startup removes the user Agent, adds no Hooks, and leaves an
+  explicit rerun/repair path instead of a misleading partial success.
+- Privileged power commands ignore ownership-path test overrides when running
+  as root; production runtime integration uses compile-time fixed paths.
+- Native regression coverage increased from 48 to 57 self-tests.
+
+#### Distribution warning
+
+- The App is ad-hoc signed, not Developer ID signed or Apple-notarized.
+- The DMG includes SHA-256 verification and honest Gatekeeper instructions, but
+  remains a Public Alpha for supervised testing.
+- A Developer ID Installer signed package and notarized DMG still require Apple
+  distribution certificates that are not present on the release machine.
+
+### 中文
+
+#### 新增
+
+- 可以直接下载的 Universal DMG，同时支持 Apple Silicon 和 Intel Mac；
+- 随包提供完整终端安装器与卸载器，不再要求用户先拉源码；
+- App 发现 root Helper 缺失时，可以从“权限”页直接打开随包安装器；
+- Hook 的安装、精确校验、定向移除、备份、`0600` 私有写入和原子替换全部改成
+  原生 Swift；
+- 新增 Universal 构建、DMG 打包、SHA-256、挂载验包、发布图片和界面预览脚本；
+- 新增 GitHub Social Preview、两张 1270×760 图库素材、240×240 缩略图和一段
+  由真实界面截图制作的 29 秒预览视频。
+
+#### 调整
+
+- 下载 Release 的用户不再需要 Python、Swift、Xcode 或 Command Line Tools；
+- 源码安装和 DMG 安装共用同一套经过校验的组件安装逻辑；
+- 安装前会先用副本检查现有 Hooks 文件，确认无误后才请求管理员权限；升级时会先
+  恢复旧版接管的电源状态，再替换恢复组件；
+- App 与包内 CLI 先分别做 ad-hoc Hardened Runtime 签名，再严格校验整个 Bundle；
+- 卸载时会注销 App 登录项，并通过原生逻辑移除本项目 Hooks；
+- App 不再悄悄重新打开用户已经关闭的登录项；
+- Hooks 写入新增私有进程锁与冲突检测，同时保留无关空分组，并拒绝重复或格式
+  不正确的处理器；
+- “准备合盖”现在要求系统恢复 LaunchDaemon 和用户协调 Agent 均已安装并实际
+  加载，调暗屏幕前还会立即复查；
+- launchd 启动失败时会移除用户 Agent、不写入 Hooks，并明确提示重新运行安装器
+  修复，不再把半安装状态说成成功；
+- root 电源命令不再接受测试用所有权路径；生产运行时只使用编译期固定路径；
+- 原生自测从 48 项增加到 57 项。
+
+#### 分发提醒
+
+- App 目前仍是 ad-hoc 签名，还没有 Developer ID 签名与 Apple notarization；
+- DMG 提供 SHA-256 和如实的 Gatekeeper 说明，但仍只适合有人看守的公开 Alpha
+  测试；
+- 正式的 Developer ID Installer package 与 notarized DMG 仍需要当前发布机器上
+  没有的 Apple 分发证书。
+
 ## [0.2.2-app-alpha] - 2026-07-30
 
 ### English
@@ -224,3 +310,4 @@ All notable project changes are recorded here.
 [0.2.0-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.0-app-alpha
 [0.2.1-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.1-app-alpha
 [0.2.2-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.2-app-alpha
+[0.3.0-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.3.0-app-alpha

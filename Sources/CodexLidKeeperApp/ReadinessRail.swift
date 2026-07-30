@@ -4,6 +4,8 @@ import SwiftUI
 struct ReadinessRail: View {
     let status: KeeperStatusSnapshot
     let helperInstalled: Bool
+    let recoveryWatchdogLoaded: Bool
+    let userAgentLoaded: Bool
     let hooksInstalled: Bool
     let hookTrackingConfirmed: Bool
 
@@ -98,18 +100,30 @@ struct ReadinessRail: View {
     }
 
     private var recoveryReady: Bool {
-        helperInstalled && hooksInstalled
+        helperInstalled
+            && recoveryWatchdogLoaded
+            && userAgentLoaded
+            && hooksInstalled
     }
 
     private var recoveryDetail: String {
-        switch (helperInstalled, hooksInstalled) {
-        case (true, true):
+        switch (
+            helperInstalled,
+            recoveryWatchdogLoaded,
+            userAgentLoaded,
+            hooksInstalled
+        ) {
+        case (true, true, true, true):
             return hookTrackingConfirmed
-                ? "Helper、Hook 和 watchdog 已就绪"
-                : "Helper 与 watchdog 已就绪；Hook 等待确认"
-        case (false, _):
+                ? "Helper、Agent、Hook 和 watchdog 已就绪"
+                : "Helper、Agent 与 watchdog 已就绪；Hook 等待确认"
+        case (false, _, _, _):
             return "尚未安装 root Helper"
-        case (_, false):
+        case (_, false, _, _):
+            return "恢复 watchdog 或电源心跳尚未就绪"
+        case (_, _, false, _):
+            return "用户后台 Agent 尚未正常运行"
+        case (_, _, _, false):
             return "Codex Hook 尚未安装或信任"
         }
     }

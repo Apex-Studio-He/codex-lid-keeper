@@ -2,9 +2,9 @@
 
 [English](#english) | [中文](#中文测试说明)
 
-This guide is for `v0.2.2-app-alpha`. The release builds a native app from
-source and remains experimental. It modifies a privileged, undocumented macOS
-power setting after installation.
+This guide is for `v0.3.0-app-alpha`. The downloadable Universal DMG remains
+experimental and modifies a privileged, undocumented macOS power setting after
+installation.
 
 ---
 
@@ -13,23 +13,24 @@ power setting after installation.
 ### Safety rules
 
 - Test on a desk or another hard, open, well-ventilated surface.
-- Keep the MacBook connected to an appropriate power adapter.
+- Keep the MacBook connected to an appropriate power adapter for the first
+  closed-lid test. Disconnect power only during the open-lid T4 checks.
 - Never test inside a bag, sleeve, drawer, bed, sofa, or enclosed shelf.
 - Do not leave the first test unattended.
 - Save the emergency restore command before installing.
 - Stop if the Mac becomes unusually warm, power behavior is unclear, or the
   ownership record cannot be decoded.
 
-Emergency restore:
-
-```bash
-./scripts/emergency-restore.sh
-```
-
-Installed-path fallback:
+Emergency restore after installation:
 
 ```bash
 "/Applications/Codex Lid Keeper.app/Contents/Resources/codex-lid-keeper" emergency-restore
+```
+
+Source-checkout fallback:
+
+```bash
+./scripts/emergency-restore.sh
 ```
 
 ### What this Alpha is trying to learn
@@ -48,38 +49,58 @@ enclosed environment. That use is explicitly unsupported.
 ### Prerequisites
 
 - MacBook with macOS 13 or newer
-- Apple Command Line Tools with Swift 6
 - a current Codex build with lifecycle Hooks
 - administrator access for installation
 - a test task whose progress can be observed locally
+
+The DMG does not require Python, Swift, Xcode, or Command Line Tools. Those are
+required only when building from source.
 
 Record these before reporting:
 
 ```bash
 sw_vers
 uname -m
-swift --version
 codex --version
 ```
 
 Do not post your full Hook file, prompts, transcripts, or unsanitized paths.
 
-### Phase A — non-privileged preflight
+### Phase A — verify the download
 
-Run all checks before installation:
+Download the DMG and `SHA256SUMS` from the same GitHub Release, then run:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+```
+
+Expected:
+
+```text
+Codex-Lid-Keeper-v0.3.0-universal.dmg: OK
+```
+
+The app is ad-hoc signed and not Apple-notarized; the ad-hoc signature does not
+authenticate the publisher. Control-click the installer and choose **Open**
+after checking the GitHub Release SHA-256 and source. Never disable Gatekeeper
+system-wide.
+
+Source reviewers can reproduce all non-privileged release checks:
+
 
 ```bash
 ./scripts/build.sh
 /usr/bin/python3 scripts/test_hooks_config.py
 /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
-./scripts/build_app.sh
+./scripts/build_distribution.sh
 ```
 
 Expected results for this release:
 
-- `48/48 self-tests passed`
+- `57/57 self-tests passed`
 - `Ran 5 tests ... OK`
 - `non-blocking dry-run Hook lifecycle passed`
+- `Verified Universal DMG ...`
 
 These tests use fakes or an isolated dry-run home and do not enable the live
 sleep override.
@@ -97,20 +118,15 @@ The project is designed to preserve it rather than force it to `0`.
 
 Review at least:
 
-- `scripts/install.sh`
-- `scripts/uninstall.sh`
-- `scripts/hooks_config.py`
+- `scripts/install_components.sh`
+- `scripts/uninstall_components.sh`
+- `Sources/CodexLidKeeperCore/HooksConfiguration.swift`
 - `Resources/com.zundu.codex-lid-keeper.agent.plist`
 - `Resources/com.zundu.codex-lid-keeper.recovery.plist`
 - `SECURITY.md`
 
-Then install:
-
-```bash
-./scripts/install.sh
-```
-
-The installer builds from source, runs self-tests, and then installs:
+Open the DMG, Control-click **Install Codex Lid Keeper.command**, and choose
+**Open**. The installer validates the bundled app and then installs:
 
 - a root-owned helper in `/Library/PrivilegedHelperTools`;
 - an exact-command sudoers rule;
@@ -121,6 +137,13 @@ The installer builds from source, runs self-tests, and then installs:
 
 Open `/hooks` in Codex after installation. Review and trust the new Hook
 definitions. Codex skips untrusted command Hooks.
+
+Open **Codex Lid Keeper > Settings > Permissions** and confirm that **root
+Helper**, **recovery watchdog**, **user background Agent**, and **Codex Hooks**
+are green. The App checks that the recovery job is loaded, the user Agent is
+actually running and holding its daemon lock, and an owned root power heartbeat
+is fresh—not only whether plist files exist. If either launchd row is red, use
+**Install or repair system components** before any lid-close test.
 
 ### Phase C — open-lid functional matrix
 
@@ -173,7 +196,7 @@ Verify that `pause` restores owned power, `resume` allows later activation, and
 With an active test lease, run:
 
 ```bash
-./scripts/emergency-restore.sh
+"/Applications/Codex Lid Keeper.app/Contents/Resources/codex-lid-keeper" emergency-restore
 ```
 
 Confirm automation is paused, leases are cleared, and ownership is no longer
@@ -241,12 +264,12 @@ privately through GitHub Security Advisories.
 
 ### Uninstall
 
-```bash
-./scripts/uninstall.sh
-```
+Run **Uninstall Codex Lid Keeper.command** from the DMG. Source reviewers may
+instead run `./scripts/uninstall.sh`.
 
 The script restores owned power before removing system integration. It retains
-the user data directory and prints its location.
+the user data directory, removes the login item, and prints the retained
+location.
 
 ---
 
@@ -255,22 +278,23 @@ the user data directory and prints its location.
 ### 先把底线说清楚
 
 - MacBook 要放在坚硬、平整、四周通风的桌面上。
-- 全程接一个规格合适的电源适配器。
+- 第一次合盖测试要全程接一个规格合适的电源适配器；只有在开盖进行 T4 供电切换
+  检查时才拔电。
 - 不要在背包、内胆包、抽屉、床、沙发或封闭柜子里试。
 - 第一次测试请人在旁边看着。
 - 安装前先把紧急恢复命令复制到手边。
 - 发现机身明显发热、电源状态说不清，或者所有权记录报错，立刻停止。
 
-紧急恢复命令：
-
-```bash
-./scripts/emergency-restore.sh
-```
-
-如果已经安装，也可以执行：
+安装完成后的紧急恢复命令：
 
 ```bash
 "/Applications/Codex Lid Keeper.app/Contents/Resources/codex-lid-keeper" emergency-restore
+```
+
+如果是在源码目录测试，也可以执行：
+
+```bash
+./scripts/emergency-restore.sh
 ```
 
 ### 我们想从 Alpha 测试里确认什么
@@ -290,38 +314,58 @@ the user data directory and prints its location.
 你需要：
 
 - macOS 13 或更高版本的 MacBook
-- Swift 6 和 Apple Command Line Tools
 - 支持生命周期 Hook 的 Codex
 - 安装时可以输入管理员密码
 - 一个能看出进度的测试任务，例如持续写时间戳、编译或跑测试
+
+直接安装 DMG 不需要 Python、Swift、Xcode 或 Command Line Tools。只有从源码
+构建时才需要这些开发工具。
 
 先记下环境信息，后面反馈问题时会用到：
 
 ```bash
 sw_vers
 uname -m
-swift --version
 codex --version
 ```
 
 不要把完整 Hook 文件、提示词、聊天内容或没有打码的个人路径发到公开 Issue。
 
-### 第一步：安装前先跑自测
+### 第一步：先确认下载没损坏
+
+从同一个 GitHub Release 下载 DMG 和 `SHA256SUMS`，在两者所在目录执行：
+
+```bash
+shasum -a 256 -c SHA256SUMS
+```
+
+正常会看到：
+
+```text
+Codex-Lid-Keeper-v0.3.0-universal.dmg: OK
+```
+
+当前 App 是 ad-hoc 签名，还没有通过 Apple notarization；ad-hoc 签名不能证明
+发布者身份。确认 GitHub Release 同页的 SHA-256 和源码无误后，按住 Control
+点击安装程序，再选择“打开”。不要为了测试在系统范围内关闭 Gatekeeper。
+
+如果你希望从源码复现完整自动验证，再运行：
 
 ```bash
 ./scripts/build.sh
 /usr/bin/python3 scripts/test_hooks_config.py
 /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
-./scripts/build_app.sh
+./scripts/build_distribution.sh
 ```
 
 这个版本正常情况下会看到：
 
-- `48/48 self-tests passed`
+- `57/57 self-tests passed`
 - `Ran 5 tests ... OK`
 - `non-blocking dry-run Hook lifecycle passed`
+- `Verified Universal DMG ...`
 
-这些命令只会使用 fake 和临时目录，不会去改真实的 `pmset`。
+这些命令只会使用模拟对象和临时目录，不会去改真实的 `pmset`。
 
 再把安装前的电源配置记下来：
 
@@ -336,23 +380,27 @@ pmset -g custom
 
 建议至少看一遍：
 
-- `scripts/install.sh`
-- `scripts/uninstall.sh`
-- `scripts/hooks_config.py`
+- `scripts/install_components.sh`
+- `scripts/uninstall_components.sh`
+- `Sources/CodexLidKeeperCore/HooksConfiguration.swift`
 - `Resources/` 里的两个 plist
 - [安全说明](SECURITY.zh-CN.md)
 
-确认没有问题后再运行：
+确认没有问题后，打开 DMG，按住 Control 点击
+**Install Codex Lid Keeper.command**，选择“打开”。
 
-```bash
-./scripts/install.sh
-```
-
-脚本会把图形化 App 安装到 `/Applications`，同时安装固定功能 Helper、用户
-LaunchAgent、root watchdog 和五个 Codex 生命周期 Hook。
+安装器会先检查包内标识、plist、芯片架构和签名完整性，再把图形化 App 安装到
+`/Applications`，同时安装固定功能 Helper、用户 LaunchAgent、root watchdog
+和五个 Codex 生命周期 Hook。
 
 安装完成后，在 Codex 里输入 `/hooks`。你会看到五个新增 Hook，需要逐个确认并
 信任；不信任的话，Codex 不会执行它们。
+
+再打开 **Codex Lid Keeper > 设置 > 权限**，确认 **root Helper**、**恢复
+watchdog**、**用户后台 Agent** 和 **Codex Hooks** 都是绿色。App 不只看 plist
+文件在不在：它会确认恢复任务已加载、用户 Agent 正在运行并持有 daemon 锁；
+一旦接管电源，还会检查 root 心跳是否新鲜。如果任意一项仍是红色，请先点
+“安装或修复系统组件”，不要直接开始合盖测试。
 
 ### 第三步：先别合盖
 
@@ -402,7 +450,7 @@ LaunchAgent、root watchdog 和五个 Codex 生命周期 Hook。
 保持一个测试任务在运行，然后执行：
 
 ```bash
-./scripts/emergency-restore.sh
+"/Applications/Codex Lid Keeper.app/Contents/Resources/codex-lid-keeper" emergency-restore
 ```
 
 确认三件事：自动运行已暂停、任务记录已清空、睡眠设置已经恢复。
@@ -457,9 +505,8 @@ Issue 里请写清楚：
 
 ### 卸载
 
-```bash
-./scripts/uninstall.sh
-```
+打开 DMG，运行 **Uninstall Codex Lid Keeper.command**。从源码测试时也可以运行
+`./scripts/uninstall.sh`。
 
 卸载脚本会先恢复由本项目修改的电源设置，再移除 Helper、sudoers、launchd 项和
-Hook。日志与配置会保留，脚本会把目录位置打印出来。
+Hook，也会注销登录项。日志与配置会保留，脚本会把目录位置打印出来。

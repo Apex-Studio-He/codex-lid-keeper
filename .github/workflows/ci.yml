@@ -10,30 +10,22 @@ permissions:
 jobs:
   macos:
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build
-        run: swift build -c release -Xswiftc -warnings-as-errors
-
-      - name: Core self-tests
-        run: swift run -c release --skip-build codex-lid-keeper-self-test
-
-      - name: Hook configuration tests
-        run: /usr/bin/python3 scripts/test_hooks_config.py
-
-      - name: Dry-run lifecycle test
-        run: /usr/bin/python3 scripts/test_e2e.py --binary .build/release/codex-lid-keeper
-
-      - name: Build and verify macOS app
-        run: |
-          ./scripts/build_app.sh
-          /usr/bin/codesign --verify --deep --strict "dist/Codex Lid Keeper.app"
-          /usr/bin/plutil -lint "dist/Codex Lid Keeper.app/Contents/Info.plist"
+      - name: Build and verify Universal DMG
+        run: ./scripts/build_distribution.sh
 
       - name: Validate scripts and launchd files
         run: |
           for script in scripts/*.sh; do /bin/bash -n "$script"; done
-          for plist in Resources/*.plist; do /usr/bin/plutil -lint "$plist"; done
+          while IFS= read -r plist; do /usr/bin/plutil -lint "$plist"; done < <(find Resources -name '*.plist' -type f)
           git diff --check
+
+      - name: Upload verified Alpha artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Codex-Lid-Keeper-v0.3.0-universal
+          path: dist/releases/*
+          if-no-files-found: error
