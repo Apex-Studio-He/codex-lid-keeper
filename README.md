@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> **v0.2.1 App Alpha — MacBook testers wanted**
+> **v0.2.2 App Alpha — MacBook testers wanted**
 >
 > If you can run a controlled closed-lid test on an open, well-ventilated
 > desk, start with the [testing guide](TESTING.md), then share your Mac model,
@@ -24,6 +24,9 @@ previous sleep policy and display brightness when the final task ends.
 - **Accurate concurrent counts.** Runtime observations and Hook leases are
   merged by Codex session, so two running tasks show `2` without double-counting
   the same task.
+- **Self-healing completion.** If a `Stop` Hook is missed, the matching
+  rollout `task_complete` marker clears only that exact turn. A newer turn in
+  the same session is left untouched.
 - **Live system power data.** AC state and battery charge come directly from
   macOS. If neither activity source is available, the task count shows `—`
   rather than sample data.
@@ -159,13 +162,14 @@ sleep override:
 Current baseline:
 
 ```text
-45/45 self-tests passed
+48/48 self-tests passed
 Ran 5 tests ... OK
 non-blocking dry-run Hook lifecycle passed
 ```
 
-Coverage includes immediate three-task rollout detection, stale-log suppression
-after task completion, Hook/runtime deduplication, strict event-spool capacity,
+Coverage includes immediate three-task rollout detection, stale-log
+suppression after task completion, recovery from a missed `Stop` Hook without
+deleting a newer turn, Hook/runtime deduplication, strict event-spool capacity,
 crash replay, AC and battery policies, exact prior-state restoration,
 low-charge safety, watchdog expiry, and migration from older state. Physical
 closed-lid networking, thermal behavior, and model compatibility remain manual

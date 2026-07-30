@@ -5,15 +5,18 @@ public struct RuntimeTaskDetection: Equatable, Sendable {
     public let sourceAvailable: Bool
     public let activeTasks: [TaskLease]
     public let observedSessionIDs: Set<String>
+    public let completedTaskIDs: Set<String>
 
     public init(
         sourceAvailable: Bool,
         activeTasks: [TaskLease],
-        observedSessionIDs: Set<String> = []
+        observedSessionIDs: Set<String> = [],
+        completedTaskIDs: Set<String> = []
     ) {
         self.sourceAvailable = sourceAvailable
         self.activeTasks = activeTasks
         self.observedSessionIDs = observedSessionIDs
+        self.completedTaskIDs = completedTaskIDs
     }
 
     public static let unavailable = RuntimeTaskDetection(
@@ -91,7 +94,8 @@ public final class CodexRuntimeTaskDetector: RuntimeTaskDetecting {
         return RuntimeTaskDetection(
             sourceAvailable: true,
             activeTasks: tasks,
-            observedSessionIDs: rollout.observedSessionIDs
+            observedSessionIDs: rollout.observedSessionIDs,
+            completedTaskIDs: rollout.completedTaskIDs
         )
     }
 
@@ -427,6 +431,7 @@ private final class CodexRolloutTaskDetector {
 
             var tasks: [TaskLease] = []
             var observedSessionIDs: Set<String> = []
+            var completedTaskIDs: Set<String> = []
             for thread in threads {
                 let lifecycle = try refreshLifecycle(for: thread)
                 guard let lifecycle,
@@ -434,14 +439,18 @@ private final class CodexRolloutTaskDetector {
                     continue
                 }
                 observedSessionIDs.insert(thread.id)
-                guard lifecycle.isActive else { continue }
+                let taskID = HookProcessor.leaseID(
+                    sessionID: thread.id,
+                    turnID: lifecycle.turnID
+                )
+                guard lifecycle.isActive else {
+                    completedTaskIDs.insert(taskID)
+                    continue
+                }
 
                 tasks.append(
                     TaskLease(
-                        id: HookProcessor.leaseID(
-                            sessionID: thread.id,
-                            turnID: lifecycle.turnID
-                        ),
+                        id: taskID,
                         sessionID: thread.id,
                         turnID: lifecycle.turnID,
                         projectName: HookProcessor.projectName(
@@ -462,7 +471,8 @@ private final class CodexRolloutTaskDetector {
             return RuntimeTaskDetection(
                 sourceAvailable: true,
                 activeTasks: tasks,
-                observedSessionIDs: observedSessionIDs
+                observedSessionIDs: observedSessionIDs,
+                completedTaskIDs: completedTaskIDs
             )
         } catch {
             return .unavailable

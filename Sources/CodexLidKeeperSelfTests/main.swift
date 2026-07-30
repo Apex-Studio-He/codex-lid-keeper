@@ -27,6 +27,9 @@ struct CodexLidKeeperSelfTests {
             ("runtime metadata detects concurrent tasks", testRuntimeTaskDetection),
             ("rollout lifecycle closes runtime log delay", testRolloutLifecycleDetection),
             ("runtime tasks drive daemon power and release", testRuntimeDaemonLifecycle),
+            ("rollout completion clears a missed Hook stop", testRuntimeCompletionClearsHookLease),
+            ("old rollout completion preserves a newer turn", testOldRuntimeCompletionPreservesNewTurn),
+            ("live status hides a completed Hook lease", testStatusHidesCompletedHookLease),
             ("hook and runtime observations are deduplicated", testTaskDeduplication),
             ("active AC task heartbeats", testActiveAC),
             ("active owned state skips early heartbeat", testHeartbeatCadence),
@@ -524,6 +527,14 @@ struct CodexLidKeeperSelfTests {
             Set(completed.activeTasks.map(\.sessionID))
                 == Set(["thread-1", "thread-3"])
         )
+        try expect(
+            completed.completedTaskIDs == Set([
+                HookProcessor.leaseID(
+                    sessionID: "thread-2",
+                    turnID: "turn-2"
+                )
+            ])
+        )
     }
 
     private static func testRuntimeDaemonLifecycle() throws {
@@ -574,6 +585,164 @@ struct CodexLidKeeperSelfTests {
         try expect(completed.reconciliation?.decision == .noTasks)
         try expect(completed.reconciliation?.activeLeaseCount == 0)
         try expect(!controller.owned)
+    }
+
+    private static func testRuntimeCompletionClearsHookLease() throws {
+        let fixture = EventFixture()
+        let completedID = HookProcessor.leaseID(
+            sessionID: "runtime",
+            turnID: "completed"
+        )
+        let staleHookLease = TaskLease(
+            id: completedID,
+            sessionID: "runtime",
+            turnID: "completed",
+            projectName: "project",
+            startedAt: testDate,
+            lastActivityAt: testDate,
+            expiresAt: testDate.addingTimeInterval(3_600)
+        )
+        try fixture.store.update { state in
+            state.leases[completedID] = staleHookLease
+        }
+        let controller = FakePowerController(owned: true)
+        let detector = MutableRuntimeTaskDetector(
+            detection: RuntimeTaskDetection(
+                sourceAvailable: true,
+                activeTasks: [],
+                observedSessionIDs: ["runtime"],
+                completedTaskIDs: [completedID]
+            )
+        )
+        let coordinator = DaemonCoordinator(
+            eventDirectory: fixture.directory,
+            stateStore: fixture.store,
+            powerSourceProvider: MutablePowerSourceProvider(
+                snapshot: PowerSnapshot(
+                    isOnACPower: true,
+                    batteryPercent: 80
+                )
+            ),
+            powerController: controller,
+            runtimeTaskDetector: detector
+        )
+
+        let report = try coordinator.runCycle(
+            configuration: testConfiguration,
+            now: testDate.addingTimeInterval(1)
+        )
+
+        try expect(try fixture.store.read().leases.isEmpty)
+        try expect(report.reconciliation?.decision == .noTasks)
+        try expect(report.reconciliation?.activeLeaseCount == 0)
+        try expect(!controller.owned)
+    }
+
+    private static func testOldRuntimeCompletionPreservesNewTurn() throws {
+        let fixture = EventFixture()
+        let oldID = HookProcessor.leaseID(
+            sessionID: "runtime",
+            turnID: "old"
+        )
+        let newID = HookProcessor.leaseID(
+            sessionID: "runtime",
+            turnID: "new"
+        )
+        let newLease = TaskLease(
+            id: newID,
+            sessionID: "runtime",
+            turnID: "new",
+            projectName: "project",
+            startedAt: testDate,
+            lastActivityAt: testDate,
+            expiresAt: testDate.addingTimeInterval(3_600)
+        )
+        try fixture.store.update { state in
+            state.leases[newID] = newLease
+        }
+        let detector = MutableRuntimeTaskDetector(
+            detection: RuntimeTaskDetection(
+                sourceAvailable: true,
+                activeTasks: [],
+                observedSessionIDs: ["runtime"],
+                completedTaskIDs: [oldID]
+            )
+        )
+        let controller = FakePowerController()
+        let coordinator = DaemonCoordinator(
+            eventDirectory: fixture.directory,
+            stateStore: fixture.store,
+            powerSourceProvider: MutablePowerSourceProvider(
+                snapshot: PowerSnapshot(
+                    isOnACPower: true,
+                    batteryPercent: 80
+                )
+            ),
+            powerController: controller,
+            runtimeTaskDetector: detector
+        )
+
+        let report = try coordinator.runCycle(
+            configuration: testConfiguration,
+            now: testDate.addingTimeInterval(1)
+        )
+
+        try expect(Set(try fixture.store.read().leases.keys) == [newID])
+        try expect(report.reconciliation?.decision == .active)
+        try expect(report.reconciliation?.activeLeaseCount == 1)
+        try expect(controller.owned)
+    }
+
+    private static func testStatusHidesCompletedHookLease() throws {
+        let homeDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: homeDirectory)
+        }
+        let paths = KeeperPaths(homeDirectory: homeDirectory)
+        let store = LockedStateStore(
+            stateFile: paths.stateFile,
+            lockFile: paths.stateLockFile
+        )
+        let completedID = HookProcessor.leaseID(
+            sessionID: "runtime",
+            turnID: "completed"
+        )
+        let lease = TaskLease(
+            id: completedID,
+            sessionID: "runtime",
+            turnID: "completed",
+            projectName: "project",
+            startedAt: testDate,
+            lastActivityAt: testDate,
+            expiresAt: testDate.addingTimeInterval(3_600)
+        )
+        try store.update { state in
+            state.leases[completedID] = lease
+        }
+        let controller = KeeperController(
+            paths: paths,
+            powerSourceProvider: MutablePowerSourceProvider(
+                snapshot: PowerSnapshot(
+                    isOnACPower: true,
+                    batteryPercent: 80
+                )
+            ),
+            powerController: FakePowerController(),
+            runtimeTaskDetector: MutableRuntimeTaskDetector(
+                detection: RuntimeTaskDetection(
+                    sourceAvailable: true,
+                    activeTasks: [],
+                    observedSessionIDs: ["runtime"],
+                    completedTaskIDs: [completedID]
+                )
+            )
+        )
+
+        let status = try controller.status()
+
+        try expect(status.activeLeases.isEmpty)
+        try expect(!status.codexIsWorking)
     }
 
     private static func testTaskDeduplication() throws {
