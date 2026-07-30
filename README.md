@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-> **v0.2.0 App Alpha — MacBook testers wanted**
+> **v0.2.1 App Alpha — MacBook testers wanted**
 >
 > If you can run a controlled closed-lid test on an open, well-ventilated
 > desk, start with the [testing guide](TESTING.md), then share your Mac model,
@@ -18,9 +18,9 @@ previous sleep policy and display brightness when the final task ends.
 
 ## What the app shows
 
-- **Actual Codex activity.** Read-only runtime metadata detects work that was
-  already running when the app was installed; lifecycle Hooks then provide
-  durable start, progress, stop, and session-end signals.
+- **Actual Codex activity.** Read-only rollout lifecycle markers detect new
+  work immediately, turn-state logs cover compatibility fallback, and trusted
+  Hooks provide a second durable lifecycle path.
 - **Accurate concurrent counts.** Runtime observations and Hook leases are
   merged by Codex session, so two running tasks show `2` without double-counting
   the same task.
@@ -81,10 +81,13 @@ stable lifecycle path for later Codex versions.
 
 ## How activity tracking works
 
-Tracking has two local inputs. First, a read-only detector looks only at Codex
-turn-state metadata and the working directory for each active thread. It does
-not read the thread title, prompt, response, or tool payload. This lets the app
-recognize tasks that began before installation.
+Tracking has two local inputs. First, a read-only detector follows only
+`task_started`, `task_complete`, and `turn_id` lifecycle fields in recent
+Codex rollouts, plus the working directory needed for the project label. A
+minimal turn-state log query remains as a compatibility fallback. The detector
+does not model or persist thread titles, prompts, responses, or tool payloads.
+This makes new and already-running tasks visible without waiting for a later
+progress log.
 
 The app also consumes these Codex lifecycle events:
 
@@ -156,17 +159,17 @@ sleep override:
 Current baseline:
 
 ```text
-44/44 self-tests passed
+45/45 self-tests passed
 Ran 5 tests ... OK
 non-blocking dry-run Hook lifecycle passed
 ```
 
-Coverage includes runtime detection of already-running concurrent tasks,
-Hook/runtime deduplication, task completion, strict event-spool capacity, crash
-replay, AC and battery policies, exact prior-state restoration, low-charge
-safety, watchdog expiry, and migration from older state. Physical closed-lid
-networking, thermal behavior, and model compatibility remain manual hardware
-tests.
+Coverage includes immediate three-task rollout detection, stale-log suppression
+after task completion, Hook/runtime deduplication, strict event-spool capacity,
+crash replay, AC and battery policies, exact prior-state restoration,
+low-charge safety, watchdog expiry, and migration from older state. Physical
+closed-lid networking, thermal behavior, and model compatibility remain manual
+hardware tests.
 
 ## Emergency restore
 

@@ -50,18 +50,24 @@ Prompts, transcripts, model responses, tool inputs, and tool outputs are not
 decoded or stored. `cwd` is reduced to its final path component before the
 event is persisted.
 
-To recognize tasks that were already running before Hook installation, the
-user daemon also opens Codex's local SQLite databases read-only. Its queries
-select only:
+To recognize tasks immediately, including work that began before Hook
+installation, the user daemon opens Codex's local state read-only. It selects
+only thread `id`, `rollout_path`, `cwd`, and update/archive metadata, then
+examines at most the final 4 MiB of each recent rollout. Lines are rejected
+before JSON decoding unless they contain an exact lifecycle marker. The
+decoder models only:
 
-- turn-state metadata from rows whose target is
-  `codex_core::session::turn`; and
-- `id` and `cwd` for the matching thread.
+- the `event_msg` envelope;
+- `task_started` or `task_complete`; and
+- `turn_id`.
 
-It does not select thread titles, previews, first messages, prompt text,
-responses, or tool payloads. The full `cwd` is reduced to its final component
-before it enters Keeper state. If the databases are unavailable or their
-schema changes, this detector is disabled and tracking falls back to Hooks.
+A separate compatibility query reads turn-state metadata only from rows whose
+target is `codex_core::session::turn`. Neither path selects or models thread
+titles, previews, first messages, prompt text, responses, or tool payloads.
+No rollout contents are copied into Keeper state or logs. The full `cwd` is
+reduced to its final component before it enters Keeper state. If these local
+formats become unavailable or incompatible, runtime detection is disabled and
+tracking falls back to Hooks.
 
 Each queued event is limited to 64 KiB, created with `0600` permissions, and
 validated again by the daemon. The file and event directory are synchronized

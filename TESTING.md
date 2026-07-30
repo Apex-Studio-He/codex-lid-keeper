@@ -2,7 +2,7 @@
 
 [English](#english) | [中文](#中文测试说明)
 
-This guide is for `v0.2.0-app-alpha`. The release builds a native app from
+This guide is for `v0.2.1-app-alpha`. The release builds a native app from
 source and remains experimental. It modifies a privileged, undocumented macOS
 power setting after installation.
 
@@ -77,7 +77,7 @@ Run all checks before installation:
 
 Expected results for this release:
 
-- `44/44 self-tests passed`
+- `45/45 self-tests passed`
 - `Ran 5 tests ... OK`
 - `non-blocking dry-run Hook lifecycle passed`
 
@@ -317,7 +317,7 @@ codex --version
 
 这个版本正常情况下会看到：
 
-- `44/44 self-tests passed`
+- `45/45 self-tests passed`
 - `Ran 5 tests ... OK`
 - `non-blocking dry-run Hook lifecycle passed`
 

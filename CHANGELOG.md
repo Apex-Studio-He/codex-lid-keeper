@@ -4,6 +4,48 @@ All notable project changes are recorded here.
 
 本文件记录项目的重要变化。
 
+## [0.2.1-app-alpha] - 2026-07-30
+
+### English
+
+#### Fixed
+
+- New Codex turns now appear from rollout `task_started` markers instead of
+  waiting for a later turn-state progress log. In the reported three-task
+  case, the previous source lagged by about 75 seconds and temporarily showed
+  `2`.
+- Rollout `task_complete` is authoritative for the matching session, so a
+  delayed log record cannot keep a finished task counted.
+- Runtime, Hook, and fallback observations remain deduplicated by Codex
+  session.
+
+#### Privacy and verification
+
+- Rollout scanning is read-only, limited to the final 4 MiB of recent files,
+  and decodes only the lifecycle envelope, event type, and `turn_id`.
+- Titles, prompts, responses, and tool payloads are not modeled or persisted.
+- Native regression coverage increased to 45 self-tests, including the exact
+  “three active tasks, log source sees two” case and completion suppression.
+
+### 中文
+
+#### 修复
+
+- 新任务会直接跟随 rollout 的 `task_started` 出现，不再等下一条 turn 进度
+  日志。用户反馈的三任务场景里，旧数据源晚了约 75 秒，所以界面曾短暂显示
+  `2`。
+- 同一任务一旦出现 `task_complete`，就会立即从计数里移除；即使旧日志还停留
+  在“运行中”，也不会继续多算。
+- rollout、Hook 和兼容日志仍按 Codex session 去重。
+
+#### 隐私与验证
+
+- rollout 只读检查仅限近期文件末尾 4 MiB，解码结构只有生命周期外层、
+  事件类型和 `turn_id`。
+- 任务标题、提示词、回复和工具内容不会建立字段，也不会写入状态或日志。
+- Swift 自测增加到 45 项，新增“三个任务、日志只看见两个”和结束后压住滞后
+  日志两项精确回归。
+
 ## [0.2.0-app-alpha] - 2026-07-30
 
 ### English
@@ -143,3 +185,4 @@ All notable project changes are recorded here.
 
 [0.1.0-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.1.0-alpha
 [0.2.0-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.0-app-alpha
+[0.2.1-app-alpha]: https://github.com/Apex-Studio-He/codex-lid-keeper/releases/tag/v0.2.1-app-alpha
