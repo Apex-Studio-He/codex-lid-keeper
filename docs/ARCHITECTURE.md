@@ -21,7 +21,7 @@ flowchart TD
     A["Codex lifecycle Hook"] --> B["Decode minimal fields"]
     B --> C["Private atomic event spool"]
     C --> D["DaemonCoordinator.runCycle"]
-    N["Read-only Codex turn metadata"] --> O["Runtime task detector"]
+    N["Read-only rollout lifecycle + turn-log fallback"] --> O["Runtime task detector"]
     O --> D
     D --> E["Idempotent lease reducer"]
     E --> P["Deduplicate observations by session"]
@@ -38,12 +38,14 @@ flowchart TD
 The Hook's interface is one JSON object on stdin and inert `{}` on stdout. It
 does not know about leases, power sources, sudo, or launchd.
 
-The runtime detector reads only `codex_core::session::turn` state records from
-Codex's local log database and `id + cwd` from its thread database. It does not
-select thread titles, prompts, responses, or tool content. This secondary path
-bootstraps work that started before Hooks were installed. Hook and runtime
-observations use the same session/turn identity and are deduplicated before
-display and reconciliation.
+The runtime detector uses recent rollout `task_started` / `task_complete`
+markers as its immediate source and keeps the existing
+`codex_core::session::turn` query as a compatibility fallback. From the thread
+database it selects only identity, rollout path, working directory, and
+update/archive metadata. Rollout lines without an exact lifecycle marker are
+discarded before decoding; the decoder has no fields for titles, prompts,
+responses, or tool content. Hook and runtime observations use the same
+session/turn identity and are deduplicated before display and reconciliation.
 
 `DaemonCoordinator.runCycle` is the main runtime interface. It owns the
 ordering between event consumption, startup recovery, maintenance scheduling,
@@ -56,7 +58,7 @@ stateful timing rules out of the CLI loop.
 |---|---|
 | `HookProcessor` | Decode only required Hook fields and create canonical events |
 | `HookEventPipeline` | Private atomic queue, validation, ordering, replay IDs, bounded drain |
-| `CodexRuntimeTaskDetector` | Read minimal turn-state metadata and bootstrap already-running work |
+| `CodexRuntimeTaskDetector` | Combine immediate rollout lifecycle markers with a minimal turn-log fallback |
 | `LeaseReducer` | Acquire, renew, delayed release, session release, hard expiry |
 | `DaemonCoordinator` | Decide when a cycle needs power/state reconciliation |
 | `KeeperReconciler` | Convert leases, configuration, and power snapshot into an action |
@@ -98,7 +100,7 @@ ownership before capturing the new one. A malformed record is never guessed.
 | Failure | Expected behavior |
 |---|---|
 | Hook times out or queue is full | Codex proceeds; existing ownership remains watchdog-protected |
-| Codex runtime database is missing or changes incompatibly | Fall back to trusted Hooks; show unknown count until either source reports |
+| Codex runtime files are missing or change incompatibly | Fall back to the compatible runtime source or trusted Hooks; show unknown count only if all sources are unavailable |
 | Daemon crashes after state save | Event replay ID prevents duplicate semantic application |
 | Daemon disappears | Root watchdog restores after heartbeat expiry |
 | AC is removed | AC-only mode restores; battery mode continues only above its charge floor |
@@ -144,9 +146,11 @@ Codex 调用 Hook 后，`HookProcessor` 只取任务识别所需的几个字段�
 电源判断。
 
 安装前已经开始的任务不会触发新 Hook，所以还有一条只读补充链路：
-`CodexRuntimeTaskDetector` 只筛选 Codex 本地日志里的 turn 状态，并从线程库读取
-`id + cwd`。查询不会选取任务标题、提示词、回复或工具内容。两条链路最后按
-session / turn 去重，同一个任务不会算两次。
+`CodexRuntimeTaskDetector` 优先看近期 rollout 里的 `task_started` /
+`task_complete`，旧版 turn 日志只做兼容兜底。线程库只取任务标识、rollout
+路径、工作目录和更新时间；普通 rollout 行在 JSON 解码前就被跳过，解码结构里
+也没有标题、提示词、回复或工具内容。两条链路最后按 session / turn 去重，同一
+个任务不会算两次。
 
 后台的 `DaemonCoordinator.runCycle` 是整条运行链路的入口。它负责决定：
 
@@ -162,7 +166,7 @@ session / turn 去重，同一个任务不会算两次。
 
 - `HookProcessor`：把 Hook 输入整理成统一事件；
 - `HookEventPipeline`：写队列、校验、排序、去重和分批处理；
-- `CodexRuntimeTaskDetector`：只读补记安装前已经在跑的任务；
+- `CodexRuntimeTaskDetector`：用即时开始 / 结束标记配合 turn 日志兜底；
 - `LeaseReducer`：新增任务、续期、延迟结束和强制过期；
 - `DaemonCoordinator`：安排每一轮后台工作；
 - `KeeperReconciler`：结合任务、电源和配置，决定保持还是恢复；
@@ -196,8 +200,8 @@ AC；“接电或电池”会分别处理两套配置。
 ### 各种故障会怎样
 
 - **Hook 超时或队列满：** 不拦 Codex；已经接管的电源状态继续由 watchdog 兜底。
-- **Codex 运行数据库不存在或格式变化：** 回退到受信任的 Hook；两条链路都没
-  报过状态前，界面显示未知数量。
+- **Codex 运行文件不存在或格式变化：** 先使用仍兼容的只读来源，再回退到受
+  信任的 Hook；所有来源都不可用时，界面才显示未知数量。
 - **保存状态后 daemon 崩了：** 重启后可能重读事件，但事件 ID 会拦住重复执行。
 - **daemon 一直没回来：** root watchdog 等心跳过期后恢复。
 - **运行中拔电：** 仅接电模式会恢复；电池模式只在高于安全线时继续。
@@ -208,4 +212,5 @@ AC；“接电或电池”会分别处理两套配置。
 - **配置文件写坏了：** 后台停止接管，但紧急恢复命令仍然可用。
 
 用户目录里只保存任务识别、配置、状态和日志，不保存提示词或工具内容。只读检测
-不会复制 Codex 数据库正文；root 所有权记录只有 root 能访问。
+不会把 Codex 数据库或 rollout 正文复制进 Keeper；root 所有权记录只有 root
+能访问。

@@ -4,10 +4,16 @@ import SQLite3
 public struct RuntimeTaskDetection: Equatable, Sendable {
     public let sourceAvailable: Bool
     public let activeTasks: [TaskLease]
+    public let observedSessionIDs: Set<String>
 
-    public init(sourceAvailable: Bool, activeTasks: [TaskLease]) {
+    public init(
+        sourceAvailable: Bool,
+        activeTasks: [TaskLease],
+        observedSessionIDs: Set<String> = []
+    ) {
         self.sourceAvailable = sourceAvailable
         self.activeTasks = activeTasks
+        self.observedSessionIDs = observedSessionIDs
     }
 
     public static let unavailable = RuntimeTaskDetection(
@@ -28,6 +34,7 @@ public final class CodexRuntimeTaskDetector: RuntimeTaskDetecting {
     private let stateDatabase: URL
     private let rowLimit: Int
     private let fileManager: FileManager
+    private let rolloutDetector: CodexRolloutTaskDetector
     private let lock = NSLock()
     private var candidates: [String: TurnCandidate] = [:]
     private var projectDirectories: [String: String] = [:]
@@ -45,10 +52,51 @@ public final class CodexRuntimeTaskDetector: RuntimeTaskDetecting {
         stateDatabase = codexDirectory.appendingPathComponent("state_5.sqlite")
         self.rowLimit = max(1, rowLimit)
         self.fileManager = fileManager
+        rolloutDetector = CodexRolloutTaskDetector(
+            stateDatabase: stateDatabase,
+            fileManager: fileManager
+        )
     }
 
     public func detectActiveTasks(
         now: Date = Date(),
+        maximumAge: TimeInterval
+    ) -> RuntimeTaskDetection {
+        let rollout = rolloutDetector.detectActiveTasks(
+            now: now,
+            maximumAge: maximumAge
+        )
+        let log = detectLogTasks(
+            now: now,
+            maximumAge: maximumAge
+        )
+        guard rollout.sourceAvailable || log.sourceAvailable else {
+            return .unavailable
+        }
+
+        var tasksBySession: [String: TaskLease] = [:]
+        for task in log.activeTasks
+        where !rollout.observedSessionIDs.contains(task.sessionID) {
+            tasksBySession[task.sessionID] = task
+        }
+        for task in rollout.activeTasks {
+            tasksBySession[task.sessionID] = task
+        }
+        let tasks = tasksBySession.values.sorted {
+            if $0.startedAt == $1.startedAt {
+                return $0.id < $1.id
+            }
+            return $0.startedAt < $1.startedAt
+        }
+        return RuntimeTaskDetection(
+            sourceAvailable: true,
+            activeTasks: tasks,
+            observedSessionIDs: rollout.observedSessionIDs
+        )
+    }
+
+    private func detectLogTasks(
+        now: Date,
         maximumAge: TimeInterval
     ) -> RuntimeTaskDetection {
         lock.lock()
@@ -333,6 +381,311 @@ private struct TurnCandidate {
     let latestActivityAt: Date
     let latestActivityNanos: Int64
     var oldestActivityAt: Date
+}
+
+private final class CodexRolloutTaskDetector {
+    private static let candidateLimit = 512
+    private static let initialTailByteLimit = 4 * 1_024 * 1_024
+    private static let lifecycleLineByteLimit = 64 * 1_024
+    private static let newline = UInt8(ascii: "\n")
+    private static let taskStartedMarker = Data(
+        "\"type\":\"task_started\"".utf8
+    )
+    private static let taskCompleteMarker = Data(
+        "\"type\":\"task_complete\"".utf8
+    )
+
+    private let stateDatabase: URL
+    private let fileManager: FileManager
+    private let lock = NSLock()
+    private let decoder = JSONDecoder()
+    private var cache: [String: RolloutCacheEntry] = [:]
+
+    init(
+        stateDatabase: URL,
+        fileManager: FileManager
+    ) {
+        self.stateDatabase = stateDatabase
+        self.fileManager = fileManager
+    }
+
+    func detectActiveTasks(
+        now: Date,
+        maximumAge: TimeInterval
+    ) -> RuntimeTaskDetection {
+        lock.lock()
+        defer { lock.unlock() }
+        guard fileManager.fileExists(atPath: stateDatabase.path) else {
+            return .unavailable
+        }
+
+        do {
+            let cutoff = now.addingTimeInterval(-maximumAge)
+            let threads = try readCandidateThreads(since: cutoff)
+            let candidateIDs = Set(threads.map(\.id))
+            cache = cache.filter { candidateIDs.contains($0.key) }
+
+            var tasks: [TaskLease] = []
+            var observedSessionIDs: Set<String> = []
+            for thread in threads {
+                let lifecycle = try refreshLifecycle(for: thread)
+                guard let lifecycle,
+                      lifecycle.occurredAt >= cutoff else {
+                    continue
+                }
+                observedSessionIDs.insert(thread.id)
+                guard lifecycle.isActive else { continue }
+
+                tasks.append(
+                    TaskLease(
+                        id: HookProcessor.leaseID(
+                            sessionID: thread.id,
+                            turnID: lifecycle.turnID
+                        ),
+                        sessionID: thread.id,
+                        turnID: lifecycle.turnID,
+                        projectName: HookProcessor.projectName(
+                            from: thread.cwd
+                        ),
+                        startedAt: lifecycle.startedAt,
+                        lastActivityAt: lifecycle.occurredAt,
+                        expiresAt: now.addingTimeInterval(maximumAge)
+                    )
+                )
+            }
+            tasks.sort {
+                if $0.startedAt == $1.startedAt {
+                    return $0.id < $1.id
+                }
+                return $0.startedAt < $1.startedAt
+            }
+            return RuntimeTaskDetection(
+                sourceAvailable: true,
+                activeTasks: tasks,
+                observedSessionIDs: observedSessionIDs
+            )
+        } catch {
+            return .unavailable
+        }
+    }
+
+    private func readCandidateThreads(
+        since cutoff: Date
+    ) throws -> [RolloutThread] {
+        let database = try SQLiteReadOnlyDatabase(path: stateDatabase.path)
+        let sql = """
+            SELECT id, rollout_path, cwd, updated_at
+            FROM threads
+            WHERE archived = 0 AND updated_at >= ?
+            ORDER BY updated_at DESC
+            LIMIT ?;
+            """
+        return try database.query(
+            sql,
+            bindings: [
+                .integer(Int64(cutoff.timeIntervalSince1970)),
+                .integer(Int64(Self.candidateLimit)),
+            ]
+        ) { statement in
+            guard let idPointer = sqlite3_column_text(statement, 0),
+                  let pathPointer = sqlite3_column_text(statement, 1),
+                  let cwdPointer = sqlite3_column_text(statement, 2) else {
+                return nil
+            }
+            return RolloutThread(
+                id: String(cString: idPointer),
+                path: String(cString: pathPointer),
+                cwd: String(cString: cwdPointer),
+                updatedAt: Date(
+                    timeIntervalSince1970: TimeInterval(
+                        sqlite3_column_int64(statement, 3)
+                    )
+                )
+            )
+        }
+    }
+
+    private func refreshLifecycle(
+        for thread: RolloutThread
+    ) throws -> RolloutLifecycle? {
+        guard !thread.path.isEmpty,
+              fileManager.fileExists(atPath: thread.path) else {
+            cache.removeValue(forKey: thread.id)
+            return nil
+        }
+        let attributes = try fileManager.attributesOfItem(
+            atPath: thread.path
+        )
+        let fileSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+
+        var entry = cache[thread.id]
+            ?? RolloutCacheEntry(
+                path: thread.path,
+                scannedByteCount: 0,
+                pendingLine: Data(),
+                latest: nil
+            )
+        if entry.path != thread.path
+            || fileSize < entry.scannedByteCount {
+            entry = RolloutCacheEntry(
+                path: thread.path,
+                scannedByteCount: 0,
+                pendingLine: Data(),
+                latest: nil
+            )
+        }
+        guard fileSize != entry.scannedByteCount else {
+            return entry.latest
+        }
+
+        let initialRead = entry.scannedByteCount == 0
+        let desiredStart = initialRead
+            ? fileSize.saturatingSubtract(
+                UInt64(Self.initialTailByteLimit)
+            )
+            : entry.scannedByteCount
+        let readStart = initialRead && desiredStart > 0
+            ? desiredStart - 1
+            : desiredStart
+        let handle = try FileHandle(
+            forReadingFrom: URL(fileURLWithPath: thread.path)
+        )
+        defer { try? handle.close() }
+        try handle.seek(toOffset: readStart)
+        let newData = try handle.readToEnd() ?? Data()
+
+        var bytes = Data()
+        if !initialRead {
+            bytes.append(entry.pendingLine)
+        }
+        bytes.append(newData)
+        var lines = bytes.split(
+            separator: Self.newline,
+            omittingEmptySubsequences: false
+        )
+
+        if initialRead, desiredStart > 0 {
+            if newData.first == Self.newline {
+                if !lines.isEmpty {
+                    lines.removeFirst()
+                }
+            } else if !lines.isEmpty {
+                lines.removeFirst()
+            }
+        }
+
+        if bytes.last == Self.newline {
+            entry.pendingLine.removeAll(keepingCapacity: true)
+            if lines.last?.isEmpty == true {
+                lines.removeLast()
+            }
+        } else if let partial = lines.popLast() {
+            entry.pendingLine = partial.count
+                    <= Self.lifecycleLineByteLimit
+                ? Data(partial)
+                : Data()
+        }
+
+        for line in lines {
+            guard line.count <= Self.lifecycleLineByteLimit,
+                  containsLifecycleMarker(line),
+                  let event = try? decoder.decode(
+                      RolloutLifecycleEnvelope.self,
+                      from: Data(line)
+                  ),
+                  event.type == "event_msg",
+                  let payload = event.payload,
+                  let turnID = nonempty(payload.turnID),
+                  let eventType = payload.type,
+                  eventType == "task_started"
+                      || eventType == "task_complete" else {
+                continue
+            }
+
+            entry.latest = RolloutLifecycle(
+                turnID: turnID,
+                isActive: eventType == "task_started",
+                occurredAt: thread.updatedAt,
+                startedAt: turnStartDate(from: turnID)
+                    ?? thread.updatedAt
+            )
+        }
+
+        entry.scannedByteCount = fileSize
+        cache[thread.id] = entry
+        return entry.latest
+    }
+
+    private func containsLifecycleMarker(
+        _ line: Data.SubSequence
+    ) -> Bool {
+        line.range(of: Self.taskStartedMarker) != nil
+            || line.range(of: Self.taskCompleteMarker) != nil
+    }
+
+    private func turnStartDate(from turnID: String) -> Date? {
+        let timestampHex = turnID
+            .filter(\.isHexDigit)
+            .prefix(12)
+        guard timestampHex.count == 12,
+              let milliseconds = UInt64(timestampHex, radix: 16) else {
+            return nil
+        }
+        return Date(
+            timeIntervalSince1970: TimeInterval(milliseconds) / 1_000
+        )
+    }
+
+    private func nonempty(_ value: String?) -> String? {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty else {
+            return nil
+        }
+        return value
+    }
+}
+
+private struct RolloutThread {
+    let id: String
+    let path: String
+    let cwd: String
+    let updatedAt: Date
+}
+
+private struct RolloutCacheEntry {
+    let path: String
+    var scannedByteCount: UInt64
+    var pendingLine: Data
+    var latest: RolloutLifecycle?
+}
+
+private struct RolloutLifecycle {
+    let turnID: String
+    let isActive: Bool
+    let occurredAt: Date
+    let startedAt: Date
+}
+
+private struct RolloutLifecycleEnvelope: Decodable {
+    let type: String?
+    let payload: RolloutLifecyclePayload?
+}
+
+private struct RolloutLifecyclePayload: Decodable {
+    let type: String?
+    let turnID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case turnID = "turn_id"
+    }
+}
+
+private extension UInt64 {
+    func saturatingSubtract(_ value: UInt64) -> UInt64 {
+        self >= value ? self - value : 0
+    }
 }
 
 private enum SQLiteBinding {

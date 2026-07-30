@@ -25,6 +25,7 @@ struct CodexLidKeeperSelfTests {
             ("daemon coordinator becomes idle after startup", testDaemonIdle),
             ("daemon coordinator maintains active power", testDaemonMaintenance),
             ("runtime metadata detects concurrent tasks", testRuntimeTaskDetection),
+            ("rollout lifecycle closes runtime log delay", testRolloutLifecycleDetection),
             ("runtime tasks drive daemon power and release", testRuntimeDaemonLifecycle),
             ("hook and runtime observations are deduplicated", testTaskDeduplication),
             ("active AC task heartbeats", testActiveAC),
@@ -492,6 +493,36 @@ struct CodexLidKeeperSelfTests {
         )
         try expect(
             first.lastActivityAt == Date(timeIntervalSince1970: 9_900)
+        )
+    }
+
+    private static func testRolloutLifecycleDetection() throws {
+        let fixture = try RolloutRuntimeDetectionFixture()
+        let detector = CodexRuntimeTaskDetector(
+            homeDirectory: fixture.homeDirectory
+        )
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        let started = detector.detectActiveTasks(
+            now: now,
+            maximumAge: 3_600
+        )
+        try expect(started.sourceAvailable)
+        try expect(started.activeTasks.count == 3)
+        try expect(
+            Set(started.activeTasks.map(\.sessionID))
+                == Set(["thread-1", "thread-2", "thread-3"])
+        )
+
+        try fixture.completeThread2()
+        let completed = detector.detectActiveTasks(
+            now: now.addingTimeInterval(1),
+            maximumAge: 3_600
+        )
+        try expect(completed.activeTasks.count == 2)
+        try expect(
+            Set(completed.activeTasks.map(\.sessionID))
+                == Set(["thread-1", "thread-3"])
         )
     }
 
@@ -1281,6 +1312,122 @@ private final class RuntimeDetectionFixture {
 
     deinit {
         try? FileManager.default.removeItem(at: homeDirectory)
+    }
+
+    private static func runSQLite(database: URL, sql: String) throws {
+        let process = Process()
+        let input = Pipe()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [database.path]
+        process.standardInput = input
+        process.standardError = errors
+        try process.run()
+        input.fileHandleForWriting.write(Data(sql.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(
+                decoding: errors.fileHandleForReading.readDataToEndOfFile(),
+                as: UTF8.self
+            )
+            throw SelfTestFailure("sqlite fixture failed: \(message)")
+        }
+    }
+}
+
+private final class RolloutRuntimeDetectionFixture {
+    let homeDirectory: URL
+    private let thread2Rollout: URL
+
+    init() throws {
+        homeDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let codexDirectory = homeDirectory
+            .appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: codexDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let thread1Rollout = codexDirectory.appendingPathComponent("thread-1.jsonl")
+        thread2Rollout = codexDirectory.appendingPathComponent("thread-2.jsonl")
+        let thread3Rollout = codexDirectory.appendingPathComponent("thread-3.jsonl")
+        try Data().write(to: thread1Rollout)
+        try Data().write(to: thread2Rollout)
+        try Data(
+            """
+            {"timestamp":"1970-01-01T02:46:35.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-3","started_at":"1970-01-01T02:46:35.000Z"}}
+
+            """.utf8
+        ).write(to: thread3Rollout)
+
+        try Self.runSQLite(
+            database: codexDirectory.appendingPathComponent("logs_2.sqlite"),
+            sql: """
+                CREATE TABLE logs (
+                    ts INTEGER NOT NULL,
+                    ts_nanos INTEGER NOT NULL,
+                    target TEXT NOT NULL,
+                    feedback_log_body TEXT NOT NULL
+                );
+                CREATE INDEX idx_logs_ts ON logs(ts);
+                INSERT INTO logs VALUES (
+                    9990, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-1}:turn{ turn.id=turn-1 } needs_follow_up=true'
+                );
+                INSERT INTO logs VALUES (
+                    9991, 1, 'codex_core::session::turn',
+                    'session_loop{thread_id=thread-2}:turn{ turn.id=turn-2 } needs_follow_up=true'
+                );
+                """
+        )
+        try Self.runSQLite(
+            database: codexDirectory.appendingPathComponent("state_5.sqlite"),
+            sql: """
+                CREATE TABLE threads (
+                    id TEXT PRIMARY KEY,
+                    rollout_path TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    cwd TEXT NOT NULL
+                );
+                INSERT INTO threads VALUES (
+                    'thread-1', '\(Self.sqlQuote(thread1Rollout.path))',
+                    9999, 0, '/tmp/alpha'
+                );
+                INSERT INTO threads VALUES (
+                    'thread-2', '\(Self.sqlQuote(thread2Rollout.path))',
+                    9999, 0, '/tmp/beta'
+                );
+                INSERT INTO threads VALUES (
+                    'thread-3', '\(Self.sqlQuote(thread3Rollout.path))',
+                    9999, 0, '/tmp/gamma'
+                );
+                """
+        )
+    }
+
+    func completeThread2() throws {
+        let handle = try FileHandle(forWritingTo: thread2Rollout)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(
+            contentsOf: Data(
+                """
+                {"timestamp":"1970-01-01T02:46:36.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2","completed_at":"1970-01-01T02:46:36.000Z"}}
+
+                """.utf8
+            )
+        )
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: homeDirectory)
+    }
+
+    private static func sqlQuote(_ value: String) -> String {
+        value.replacingOccurrences(of: "'", with: "''")
     }
 
     private static func runSQLite(database: URL, sql: String) throws {
